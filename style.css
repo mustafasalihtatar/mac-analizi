@@ -21,6 +21,7 @@ button, input { font: inherit; color: inherit; }
   padding: 14px 16px 6px; max-width: 960px; margin: 0 auto; }
 .brand { font-family: var(--cond); font-weight: 700; font-size: 26px; color: var(--light); text-decoration: none; }
 .updated { margin: 0; color: var(--mist); font-size: 13px; text-align: right; }
+.updated.stale { color: var(--board); }
 
 main { max-width: 960px; margin: 0 auto; padding: 0 16px; outline: none; }
 h1 { font-family: var(--cond); font-weight: 700; font-size: 34px; line-height: 1.1; margin: 10px 0 12px; }

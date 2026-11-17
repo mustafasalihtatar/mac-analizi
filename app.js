@@ -44,6 +44,17 @@ const parseNum = (v) => parseFloat(String(v).trim().replace(",", ".")); // "1,75
 const days = () => (DATA ? DATA[state.sport] : []);
 const matchLabel = (m) => `${m.home} – ${m.away}`;
 
+const STALE_MS = 12 * 3600 * 1000;
+function updateHeader() {
+  const el = document.getElementById("updated");
+  if (!DATA) return;
+  const name = state.sport === "football" ? "Futbol" : "NBA";
+  const t = DATA.odds_updated && DATA.odds_updated[state.sport];
+  const stale = t && Date.now() - new Date(t).getTime() > STALE_MS;
+  el.textContent = t ? `${name} oranları: ${fmtDateTime(t)}${stale ? " (eski olabilir)" : ""}` : `${name} oranları: henüz yok`;
+  el.classList.toggle("stale", Boolean(stale));
+}
+
 function toast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg;
@@ -101,7 +112,7 @@ function addCoupon(c) {
 /* ---------- ortak parçalar ---------- */
 function sportSwitch(onChange) {
   const b = (sport, label) => h("button", { type: "button", "aria-pressed": state.sport === sport,
-    onclick: () => { state.sport = sport; state.day = 0; onChange(); } }, label);
+    onclick: () => { state.sport = sport; state.day = 0; updateHeader(); onChange(); } }, label);
   return h("div", { class: "seg", role: "group", "aria-label": "Spor" }, b("football", "Futbol"), b("basketball", "NBA"));
 }
 function dayChips(onChange) {
@@ -111,7 +122,8 @@ function dayChips(onChange) {
 }
 function note() {
   return h("p", { class: "note" }, "Oranlar uluslararası bahis şirketlerinden; iddaa oranları farklı olabilir. ",
-    "Olasılıklar oranlardan hesaplanır, hiçbir kupon garanti değildir.");
+    "Olasılıklar oranlardan hesaplanır, hiçbir kupon garanti değildir.",
+    DATA ? ` Site yayını: ${fmtDateTime(DATA.generated_at)}.` : "");
 }
 
 /* ---------- görünüm: kuponlar ---------- */
@@ -308,6 +320,10 @@ function route() {
   });
   if (!DATA) return;
   if (hash.startsWith("#/mac/")) {
+    const ref = byId.get((() => { try { return decodeURIComponent(hash.slice(6)); } catch { return ""; } })());
+    if (ref) { state.sport = ref.sport; updateHeader(); } // maç detayında o sporun oran zamanı
+  }
+  if (hash.startsWith("#/mac/")) {
     let id = "";
     try { id = decodeURIComponent(hash.slice(6)); } catch { /* bozuk adres → bulunamadı */ }
     viewMatch(root, id);
@@ -332,7 +348,7 @@ async function init() {
   for (const sport of ["football", "basketball"]) {
     for (const d of DATA[sport]) for (const m of d.matches) byId.set(m.id, { match: m, sport });
   }
-  document.getElementById("updated").textContent = `Son güncelleme: ${fmtDateTime(DATA.generated_at)}`;
+  updateHeader();
   window.addEventListener("hashchange", route);
   route();
 }
