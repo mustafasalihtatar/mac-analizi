@@ -309,11 +309,103 @@ function shareLink(legs, total, totalProb) {
   return `https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`;
 }
 
+/* ---------- görünüm: performans ---------- */
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svg(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
+  for (const kid of kids.flat()) if (kid != null) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+const brier = (x) => (x == null ? "–" : Number(x).toFixed(3));
+function calibrationChart(bins) {
+  const W = 320, P = 36, I = W - P - 12; // iç alan
+  const X = (v) => P + v * I, Y = (v) => 12 + (1 - v) * I;
+  const maxN = Math.max(1, ...bins.map((b) => b.n));
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  const used = bins.filter((b) => b.n > 0);
+  return svg("svg", { viewBox: `0 0 ${W} ${W}`, class: "calib", role: "img",
+    "aria-label": "Kalibrasyon grafiği: yatay eksen tahmin edilen olasılık, dikey eksen gerçekleşme oranı" },
+    ticks.map((t) => [
+      svg("line", { x1: X(0), x2: X(1), y1: Y(t), y2: Y(t), class: "grid" }),
+      svg("text", { x: P - 6, y: Y(t) + 4, class: "tick", "text-anchor": "end" }, `%${t * 100}`),
+      svg("text", { x: X(t), y: W - 6, class: "tick", "text-anchor": "middle" }, `%${t * 100}`),
+    ]),
+    svg("line", { x1: X(0), y1: Y(0), x2: X(1), y2: Y(1), class: "diag" }),
+    used.length > 1 ? svg("polyline", { points: used.map((b) => `${X(b.pred)},${Y(b.obs)}`).join(" "), class: "path" }) : null,
+    used.map((b) => svg("circle", { cx: X(b.pred), cy: Y(b.obs), r: 3 + 7 * Math.sqrt(b.n / maxN), class: "dot" },
+      svg("title", {}, `Tahmin ${pct(b.pred)}, gerçekleşen ${pct(b.obs)} (${b.n} olay)`))));
+}
+const OUT = ["home", "draw", "away"];
+function outcomeOf(score) {
+  const [a, b] = score.split("-").map(Number);
+  return a > b ? "home" : a < b ? "away" : "draw";
+}
+function viewPerformance(root) {
+  const p = DATA.performance;
+  const kids = [h("h1", {}, "Performans"),
+    h("p", { class: "muted" }, "Maç başlamadan önceki son tahminlerimiz gerçek sonuçlarla karşılaştırılıyor. ",
+      "Süper Lig, Premier Lig, La Liga, Bundesliga, Serie A ve Ligue 1; sonuçlar maçtan 1–3 gün sonra eklenir.")];
+  if (!p || !p.n) {
+    kids.push(h("p", { class: "empty" }, "Henüz sonuçlanmış maç yok. Maçlar bittikçe burada görünecek."), note());
+    root.replaceChildren(...kids);
+    return;
+  }
+  kids.push(h("div", { class: "stats" },
+    h("div", {}, h("span", { class: "small muted" }, "Ölçülen maç"), h("b", {}, p.n)),
+    h("div", {}, h("span", { class: "small muted" }, "Favori tuttu"), h("b", {}, pct(p.favorite_hit))),
+    h("div", {}, h("span", { class: "small muted" }, "Dönem"), h("span", { class: "range" }, `${fmtDate(p.from)} – ${fmtDate(p.to)}`))));
+  if (p.n < p.min_reliable) {
+    kids.push(h("p", { class: "warn" }, `Henüz az veri (${p.n} maç): sonuçlar şansa çok bağlı, ${p.min_reliable}+ maçtan sonra daha anlamlı.`));
+  }
+
+  const hasModel = p.markets.some((m) => m.model_n > 0);
+  kids.push(h("h2", {}, "Brier skoru"),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Pazar"), h("th", { class: "num" }, "Brier"), h("th", { class: "num" }, "Kıyas"),
+        hasModel ? h("th", { class: "num" }, "Kendi model") : null)),
+      h("tbody", {}, p.markets.map((m) => h("tr", {},
+        h("td", {}, m.name),
+        h("td", { class: m.brier != null && m.brier < m.baseline ? "num good" : "num" }, h("b", {}, brier(m.brier))),
+        h("td", { class: "num muted" }, brier(m.baseline)),
+        hasModel ? h("td", { class: "num" }, brier(m.model_brier), m.model_n ? h("small", { class: "muted" }, ` (${m.model_n})`) : null) : null))))),
+    h("p", { class: "small muted" }, "Brier: tahmin ile sonuç arasındaki farkın karesi; 0 kusursuz, düşük daha iyi. ",
+      "Kıyas: hiçbir bilgi olmadan tahmin etmek (1X2'de her sonuca %33, diğerlerinde %50). Kıyastan düşükse tahminler işe yarıyor."));
+
+  kids.push(h("h2", {}, "Kalibrasyon"),
+    h("div", { class: "card calib-card" }, calibrationChart(p.calibration)),
+    h("p", { class: "small muted" }, "Her nokta bir olasılık dilimi (1, X, 2, Üst 2.5 ve KG Var tahminlerinin hepsi): ",
+      "yatayda ortalama tahminimiz, dikeyde gerçekte ne sıklıkla olduğu. Noktalar kesikli çizgiye yakınsa olasılıklar dürüst: ",
+      "%70 dediğimiz olaylar 10'da 7 tutuyor. Büyük nokta = daha çok olay."),
+    h("details", {}, h("summary", { class: "small" }, "Dilim tablosu"),
+      h("table", {}, h("thead", {}, h("tr", {}, ["Dilim", "Tahmin", "Gerçekleşen", "Olay"].map((c, i) => h("th", { class: i ? "num" : null }, c)))),
+        h("tbody", {}, p.calibration.filter((b) => b.n).map((b) => h("tr", {},
+          h("td", {}, `%${Math.round(b.lo * 100)}–${Math.round(b.hi * 100)}`), h("td", { class: "num" }, pct(b.pred)),
+          h("td", { class: "num" }, pct(b.obs)), h("td", { class: "num" }, b.n)))))));
+
+  kids.push(h("h2", {}, "Son maçlar"),
+    h("div", { class: "table-wrap" }, h("table", { class: "recent" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Maç"), h("th", { class: "num" }, "Skor"),
+        ["1", "X", "2"].map((c) => h("th", { class: "num" }, c)))),
+      h("tbody", {}, p.recent.map((r) => {
+        const won = outcomeOf(r.score);
+        const fav = OUT.reduce((a, k) => (r[`p_${k}`] > r[`p_${a}`] ? k : a), "home");
+        return h("tr", {},
+          h("td", {}, h("span", { class: "rm" }, `${r.home} – ${r.away}`), h("small", { class: "muted" }, fmtDate(r.kickoff))),
+          h("td", { class: "num" }, h("b", {}, r.score)),
+          OUT.map((k) => h("td", { class: k === won ? (k === fav ? "num hit" : "num act") : "num" }, pct(r[`p_${k}`]))));
+      })))),
+    h("p", { class: "small muted" }, "Yeşil: favori dediğimiz sonuç oldu. Sarı: gerçekleşen sonuç (favori değildi)."));
+  kids.push(note());
+  root.replaceChildren(...kids);
+}
+
 /* ---------- yönlendirme ---------- */
 function route() {
   const root = document.getElementById("view");
   const hash = location.hash || "#/";
-  const tab = hash.startsWith("#/kupon") ? "kupon" : hash.startsWith("#/mac") ? "maclar" : "kuponlar";
+  const tab = hash.startsWith("#/kupon") ? "kupon" : hash.startsWith("#/mac") ? "maclar"
+    : hash.startsWith("#/performans") ? "performans" : "kuponlar";
   document.querySelectorAll(".tabs a").forEach((a) => {
     if (a.dataset.tab === tab) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -330,6 +422,7 @@ function route() {
   }
   else if (hash.startsWith("#/maclar")) viewMatches(root);
   else if (hash.startsWith("#/kupon")) viewKupon(root);
+  else if (hash.startsWith("#/performans")) viewPerformance(root);
   else viewCoupons(root);
   window.scrollTo(0, 0);
 }
