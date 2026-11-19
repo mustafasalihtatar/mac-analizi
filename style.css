@@ -80,6 +80,23 @@ h3 { font-family: var(--cond); font-weight: 700; font-size: 20px; margin: 0; }
 .mini b { font-family: var(--cond); font-size: 18px; color: var(--board); font-weight: 700; }
 .mini small { color: var(--mist); font-size: 11px; }
 .started { color: var(--red); font-size: 12px; }
+.match .pbar.thin { grid-column: 1 / -1; margin-top: -2px; }
+.edge { grid-column: 1 / -1; font-size: 13px; color: var(--mist); margin-top: -4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edge-tag { color: var(--pitch); background: var(--green); border-radius: 6px; padding: 0 6px; font-weight: 600; font-size: 12px; }
+
+/* 1X2 olasılık çubuğu: ev = sarı, beraberlik = gri, deplasman = yeşil */
+.pbar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; gap: 2px; flex: 1; min-width: 0; }
+.pbar.thin { height: 4px; gap: 1px; border-radius: 2px; }
+.pbar span { display: flex; align-items: center; justify-content: center; min-width: 0;
+  font-size: 12px; font-weight: 600; color: var(--pitch); white-space: nowrap; overflow: hidden; }
+.seg-home { background: var(--board); } .seg-draw { background: var(--mist); } .seg-away { background: var(--green); }
+.pbars { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; max-width: 560px; }
+.pbar-row { display: flex; align-items: center; gap: 8px; }
+.pbar-row .lbl { width: 50px; flex-shrink: 0; font-size: 13px; color: var(--mist); }
+.pbar-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--mist); padding-left: 58px; }
+.pbar-legend span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 
 /* maç detayı */
 .back { display: inline-block; margin: 6px 0 0; color: var(--mist); text-decoration: none; }
@@ -94,6 +111,10 @@ h3 { font-family: var(--cond); font-weight: 700; font-size: 20px; margin: 0; }
 .opt .p { display: flex; flex-direction: column; min-width: 0; }
 .opt .p span:first-child { font-weight: 500; line-height: 1.25; }
 .opt .prob.model { color: var(--light); opacity: .85; }
+.opt.up { border-color: rgba(124, 217, 146, .55); }
+.diff { margin-left: 6px; border-radius: 5px; padding: 0 5px; font-weight: 600; font-size: 11px; }
+.diff.up { background: var(--green); color: var(--pitch); }
+.diff.down { background: rgba(229, 72, 77, .25); color: #FFB3B5; }
 .form { display: flex; gap: 4px; margin: 4px 0 8px; }
 .res { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; font-weight: 600; font-size: 13px; color: var(--pitch); }
 .res-G { background: var(--green); } .res-B { background: var(--board); } .res-M { background: var(--red); color: var(--light); }
@@ -121,6 +142,7 @@ tr.hl td { background: rgba(245, 197, 24, .12); }
 .stats b { font-family: var(--cond); font-size: 34px; line-height: 1; color: var(--board); }
 .stats .range { font-family: var(--cond); font-size: 20px; line-height: 1.5; }
 td.good b { color: var(--green); }
+h3.sub { margin: 18px 0 8px; }
 .calib-card { padding: 10px; max-width: 420px; }
 .calib { display: block; width: 100%; height: auto; }
 .calib .grid { stroke: var(--line); stroke-width: 1; }

@@ -43,6 +43,39 @@ const started = (m) => new Date(m.kickoff) <= new Date();
 const parseNum = (v) => parseFloat(String(v).trim().replace(",", ".")); // "1,75" → 1.75
 const days = () => (DATA ? DATA[state.sport] : []);
 const matchLabel = (m) => `${m.home} – ${m.away}`;
+/* Açılış günü: başlamamış maçı olan ilk gün, yoksa maçı olan ilk gün, o da yoksa bugün. */
+function firstDay() {
+  const ds = days();
+  let i = ds.findIndex((d) => d.matches.some((m) => !started(m)));
+  if (i < 0) i = ds.findIndex((d) => d.matches.length);
+  return Math.max(0, i);
+}
+
+/* Model ile piyasa farkı (olasılık puanı). EDGE puan ve üstü işaretlenir. Listede sadece 1X2: model gol sayısını
+   piyasadan sistematik düşük görüyor (2026-11 ölçümü), alt/üst farkları çoğunlukla bu eğilim. */
+const EDGE = 0.08;
+const diffOf = (o) => (o.model_prob == null || o.market_prob == null ? null : o.model_prob - o.market_prob);
+const pts = (d) => `${d > 0 ? "+" : "−"}${Math.round(Math.abs(d) * 100)}`;
+function bestEdge(m) { // modelin piyasadan en çok yüksek gördüğü, kupona eklenebilir seçenek
+  let best = null;
+  for (const o of m.options) {
+    const d = diffOf(o);
+    if (o.market === "h2h" && d != null && d >= EDGE && o.addable && (!best || d > diffOf(best))) best = o;
+  }
+  return best;
+}
+
+/* 1X2 olasılık çubuğu: ev / beraberlik / deplasman. */
+const OUT3 = ["home", "draw", "away"];
+function probs3(m, field) {
+  const get = (k) => { const o = m.options.find((x) => x.market === "h2h" && x.outcome === k); return o ? o[field] : null; };
+  const v = OUT3.map(get);
+  return v.every((x) => x != null) ? v : null;
+}
+function pbar(vals, thin) {
+  return h("div", { class: thin ? "pbar thin" : "pbar", "aria-hidden": "true" }, vals.map((p, i) =>
+    h("span", { class: `seg-${OUT3[i]}`, style: `flex-grow:${Math.max(p, 0.001)}` }, !thin && p >= 0.12 ? pct(p) : null)));
+}
 
 const STALE_MS = 12 * 3600 * 1000;
 function updateHeader() {
@@ -112,7 +145,7 @@ function addCoupon(c) {
 /* ---------- ortak parçalar ---------- */
 function sportSwitch(onChange) {
   const b = (sport, label) => h("button", { type: "button", "aria-pressed": state.sport === sport,
-    onclick: () => { state.sport = sport; state.day = 0; updateHeader(); onChange(); } }, label);
+    onclick: () => { state.sport = sport; state.day = firstDay(); updateHeader(); onChange(); } }, label);
   return h("div", { class: "seg", role: "group", "aria-label": "Spor" }, b("football", "Futbol"), b("basketball", "NBA"));
 }
 function dayChips(onChange) {
@@ -180,12 +213,16 @@ function viewMatches(root) {
     for (const m of day.matches) {
       if (m.competition !== comp) { comp = m.competition; kids.push(h("p", { class: "comp" }, comp)); }
       const short = { home: "1", draw: "X", away: "2" };
+      const edge = bestEdge(m), bar = probs3(m, "prob");
       kids.push(h("a", { class: "match", href: `#/mac/${encodeURIComponent(m.id)}` },
         h("span", { class: "time" }, fmtTime(m.kickoff)),
         h("span", { class: "teams" }, h("span", {}, m.home), h("span", {}, m.away),
           started(m) ? h("span", { class: "started" }, "Başladı") : null),
         h("span", { class: "mini" }, headline(m).map((o) =>
-          h("div", {}, h("b", {}, odds(o.price)), h("small", {}, `${short[o.outcome]} ${pct(o.prob)}`))))));
+          h("div", {}, h("b", {}, odds(o.price)), h("small", {}, `${short[o.outcome]} ${pct(o.prob)}`)))),
+        bar ? pbar(bar, true) : null,
+        edge ? h("span", { class: "edge" }, h("span", { class: "edge-tag" }, `Model ${pts(diffOf(edge))}`),
+          ` ${edge.pick}`) : null));
     }
   }
   kids.push(note());
@@ -210,21 +247,38 @@ function viewMatch(root, id) {
     : h("div", { class: "expected" }, h("div", {}, h("span", { class: "small muted" }, `${m.home} beklenen fark`), h("b", {}, (e.margin > 0 ? "+" : "") + e.margin.toFixed(1))),
         e.total != null ? h("div", {}, h("span", { class: "small muted" }, "Beklenen toplam"), h("b", {}, e.total.toFixed(1))) : null));
 
+  const pm = probs3(m, "market_prob"), pmod = probs3(m, "model_prob");
+  if (pm) {
+    const names = [m.home, "Beraberlik", m.away];
+    kids.push(h("div", { class: "pbars" },
+      h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Piyasa"), pbar(pm)),
+      pmod ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Model"), pbar(pmod)) : null,
+      h("div", { class: "pbar-legend" }, names.map((n, i) =>
+        h("span", {}, h("i", { class: `dot seg-${OUT3[i]}` }), n)))));
+  }
   kids.push(h("p", { class: "small muted" }, "Seçeneğe dokununca kupona eklenir; tekrar dokununca çıkar. ",
     "Piyasa: oranlardan bahis şirketi payı ayıklanmış olasılık. Model: oranlara bakmadan geçmiş maçlardan (gol ve xG) ",
-    "kurduğumuz model; Süper Lig, 5 büyük lig ve Avrupa kupalarında, diğerlerinde –."));
+    "kurduğumuz model; Süper Lig, 5 büyük lig ve Avrupa kupalarında, diğerlerinde –. ",
+    `Model piyasadan ${Math.round(EDGE * 100)}+ puan ayrılınca işaretlenir (yeşil: model daha yüksek görüyor). `,
+    "Geçmiş testte piyasa daha isabetli çıktı; fark bir fikir verir, kesin değer değildir. ",
+    "Model gol sayısını genelde piyasadan az bekliyor; alt/üst farklarına bu gözle bakın."));
   for (const [market, title] of Object.entries(GROUPS)) {
     const opts = m.options.filter((o) => o.market === market);
     if (!opts.length) continue;
     kids.push(h("h2", {}, title));
-    kids.push(h("div", { class: "options" }, opts.map((o) =>
-      h("button", { type: "button", class: "opt", disabled: !o.addable, "aria-pressed": inKupon(o.key),
+    kids.push(h("div", { class: "options" }, opts.map((o) => {
+      const d = diffOf(o);
+      const flag = d != null && Math.abs(d) >= EDGE;
+      return h("button", { type: "button", class: flag ? (d > 0 ? "opt up" : "opt down") : "opt", disabled: !o.addable,
+        "aria-pressed": inKupon(o.key),
         title: o.price && !o.addable ? "Çeyrek çizgi: yarım kazanç/iade kuralı nedeniyle kupona eklenemez" : null,
         onclick: () => { toggleOption(m, o); render(); } },
         h("span", { class: "p" }, h("span", {}, o.pick),
           h("span", { class: "prob" }, `Piyasa ${pct(o.market_prob ?? o.prob)} adil ${odds(o.fair)}`),
-          h("span", { class: "prob model" }, `Model ${pct(o.model_prob)}`)),
-        h("span", { class: "odds" }, o.price ? odds(o.price) : "–")))));
+          h("span", { class: "prob model" }, `Model ${pct(o.model_prob)}`,
+            flag ? h("span", { class: d > 0 ? "diff up" : "diff down" }, pts(d)) : null)),
+        h("span", { class: "odds" }, o.price ? odds(o.price) : "–"));
+    })));
   }
   if (m.info) kids.push(...infoBlock(m));
   kids.push(note());
@@ -318,7 +372,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 function svg(tag, attrs, ...kids) {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
-  for (const kid of kids.flat()) if (kid != null) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  for (const kid of kids.flat(Infinity)) if (kid != null) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
   return el;
 }
 const brier = (x) => (x == null ? "–" : Number(x).toFixed(3));
@@ -351,7 +405,8 @@ function viewPerformance(root) {
     h("p", { class: "muted" }, "Maç başlamadan önceki son tahminlerimiz gerçek sonuçlarla karşılaştırılıyor. ",
       "Süper Lig, 5 büyük lig, Şampiyonlar Ligi ve Avrupa Ligi; sonuçlar maçtan sonraki ilk güncellemede eklenir.")];
   if (!p || !p.n) {
-    kids.push(h("p", { class: "empty" }, "Henüz sonuçlanmış maç yok. Maçlar bittikçe burada görünecek."), note());
+    kids.push(h("p", { class: "empty" }, "Canlı ölçüm: henüz sonuçlanmış maç yok. Maçlar bittikçe burada görünecek."),
+      ...backtestBlock(), note());
     root.replaceChildren(...kids);
     return;
   }
@@ -400,8 +455,36 @@ function viewPerformance(root) {
           OUT.map((k) => h("td", { class: k === won ? (k === fav ? "num hit" : "num act") : "num" }, pct(r[`p_${k}`]))));
       })))),
     h("p", { class: "small muted" }, "Yeşil: favori dediğimiz sonuç oldu. Sarı: gerçekleşen sonuç (favori değildi)."));
-  kids.push(note());
+  kids.push(...backtestBlock(), note());
   root.replaceChildren(...kids);
+}
+function backtestBlock() {
+  const b = DATA.backtest;
+  if (!b) return [];
+  const rows = [["Piyasa (sitede gösterilen)", b.market], ["Kendi model", b.model]];
+  const better = (k, lowGood) => (lowGood ? (b.market[k] <= b.model[k] ? 0 : 1) : (b.market[k] >= b.model[k] ? 0 : 1));
+  const cell = (r, i, k, lowGood, fmt) =>
+    h("td", { class: better(k, lowGood) === i ? "num good" : "num" }, h("b", {}, fmt(r[k])));
+  const out = [h("h2", {}, "Geçmiş test"),
+    h("p", { class: "muted" }, "Süper Lig ve 5 büyük ligde geçmiş maçlar: model her hafta sadece o haftadan önceki maçlarla ",
+      "yeniden kuruldu ve o haftanın maçlarını tahmin etti; piyasa olarak kapanış oranları kullanıldı."),
+    h("div", { class: "stats" },
+      h("div", {}, h("span", { class: "small muted" }, "Test edilen maç"), h("b", {}, b.n.toLocaleString("tr-TR"))),
+      h("div", {}, h("span", { class: "small muted" }, "Dönem"), h("span", { class: "range" }, `${fmtDate(b.from)} – ${fmtDate(b.to)}`))),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Maç sonucu (1X2)"), h("th", { class: "num" }, "Favori tuttu"),
+        h("th", { class: "num" }, "Brier"))),
+      h("tbody", {}, rows.map(([name, r], i) => h("tr", {}, h("td", {}, name),
+        cell(r, i, "accuracy", false, pct), cell(r, i, "brier", true, brier)))))),
+    h("p", { class: "small muted" }, "Yeşil: daha iyi olan. Brier kıyası (her sonuca %33): 0.667. ",
+      "Kapanış oranlarını yenmek çok zordur; bu yüzden sitede piyasa olasılığı gösterilir, model yanında bilgi olarak durur.")];
+  if (b.calibration && b.calibration.length) {
+    out.push(h("h3", { class: "sub" }, "Sitedeki olasılıklar ne kadar dürüst?"),
+      h("div", { class: "card calib-card" }, calibrationChart(b.calibration)),
+      h("p", { class: "small muted" }, "Geçmiş testteki tüm 1, X, 2 olasılıkları: yatayda tahmin, dikeyde gerçekleşme. ",
+        "Noktalar kesikli çizgiye yakınsa %40 dediğimiz sonuçlar gerçekten 10'da 4 civarı oluyor."));
+  }
+  return out;
 }
 
 /* ---------- yönlendirme ---------- */
@@ -445,6 +528,7 @@ async function init() {
   for (const sport of ["football", "basketball"]) {
     for (const d of DATA[sport]) for (const m of d.matches) byId.set(m.id, { match: m, sport });
   }
+  state.day = firstDay();
   updateHeader();
   window.addEventListener("hashchange", route);
   route();
