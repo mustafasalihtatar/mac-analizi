@@ -210,7 +210,9 @@ function viewMatch(root, id) {
     : h("div", { class: "expected" }, h("div", {}, h("span", { class: "small muted" }, `${m.home} beklenen fark`), h("b", {}, (e.margin > 0 ? "+" : "") + e.margin.toFixed(1))),
         e.total != null ? h("div", {}, h("span", { class: "small muted" }, "Beklenen toplam"), h("b", {}, e.total.toFixed(1))) : null));
 
-  kids.push(h("p", { class: "small muted" }, "Seçeneğe dokununca kupona eklenir; tekrar dokununca çıkar."));
+  kids.push(h("p", { class: "small muted" }, "Seçeneğe dokununca kupona eklenir; tekrar dokununca çıkar. ",
+    "Piyasa: oranlardan bahis şirketi payı ayıklanmış olasılık. Model: oranlara bakmadan geçmiş maçlardan (gol ve xG) ",
+    "kurduğumuz model; Süper Lig, 5 büyük lig ve Avrupa kupalarında, diğerlerinde –."));
   for (const [market, title] of Object.entries(GROUPS)) {
     const opts = m.options.filter((o) => o.market === market);
     if (!opts.length) continue;
@@ -219,7 +221,9 @@ function viewMatch(root, id) {
       h("button", { type: "button", class: "opt", disabled: !o.addable, "aria-pressed": inKupon(o.key),
         title: o.price && !o.addable ? "Çeyrek çizgi: yarım kazanç/iade kuralı nedeniyle kupona eklenemez" : null,
         onclick: () => { toggleOption(m, o); render(); } },
-        h("span", { class: "p" }, h("span", {}, o.pick), h("span", { class: "prob" }, `${pct(o.prob)}  adil ${odds(o.fair)}`)),
+        h("span", { class: "p" }, h("span", {}, o.pick),
+          h("span", { class: "prob" }, `Piyasa ${pct(o.market_prob ?? o.prob)} adil ${odds(o.fair)}`),
+          h("span", { class: "prob model" }, `Model ${pct(o.model_prob)}`)),
         h("span", { class: "odds" }, o.price ? odds(o.price) : "–")))));
   }
   if (m.info) kids.push(...infoBlock(m));
@@ -345,7 +349,7 @@ function viewPerformance(root) {
   const p = DATA.performance;
   const kids = [h("h1", {}, "Performans"),
     h("p", { class: "muted" }, "Maç başlamadan önceki son tahminlerimiz gerçek sonuçlarla karşılaştırılıyor. ",
-      "Süper Lig, Premier Lig, La Liga, Bundesliga, Serie A ve Ligue 1; sonuçlar maçtan 1–3 gün sonra eklenir.")];
+      "Süper Lig, 5 büyük lig, Şampiyonlar Ligi ve Avrupa Ligi; sonuçlar maçtan sonraki ilk güncellemede eklenir.")];
   if (!p || !p.n) {
     kids.push(h("p", { class: "empty" }, "Henüz sonuçlanmış maç yok. Maçlar bittikçe burada görünecek."), note());
     root.replaceChildren(...kids);

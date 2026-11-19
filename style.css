@@ -93,6 +93,7 @@ h3 { font-family: var(--cond); font-weight: 700; font-size: 20px; margin: 0; }
 .opt:disabled { cursor: default; opacity: .65; }
 .opt .p { display: flex; flex-direction: column; min-width: 0; }
 .opt .p span:first-child { font-weight: 500; line-height: 1.25; }
+.opt .prob.model { color: var(--light); opacity: .85; }
 .form { display: flex; gap: 4px; margin: 4px 0 8px; }
 .res { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; font-weight: 600; font-size: 13px; color: var(--pitch); }
 .res-G { background: var(--green); } .res-B { background: var(--board); } .res-M { background: var(--red); color: var(--light); }
