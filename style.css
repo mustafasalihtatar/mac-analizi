@@ -74,7 +74,20 @@ h3 { font-family: var(--cond); font-weight: 700; font-size: 20px; margin: 0; }
   background: var(--turf); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; color: var(--light); text-decoration: none; }
 .match .time { font-family: var(--cond); font-size: 18px; color: var(--mist); }
 .match .teams { display: flex; flex-direction: column; min-width: 0; }
-.match .teams span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.match .teams > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.match .teams .tm { display: flex; align-items: center; gap: 7px; min-width: 0; line-height: 1.55; }
+.match .teams .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* armalar: yoksa baş harfli rozet */
+.crest { width: 20px; height: 20px; flex-shrink: 0; object-fit: contain; vertical-align: middle; }
+.crest.ini { display: inline-grid; place-items: center; border-radius: 50%; background: var(--turf-2);
+  border: 1px solid var(--line); color: var(--mist); font-size: 8.5px; font-weight: 700; letter-spacing: -.2px; line-height: 1; }
+.crest.sm { width: 15px; height: 15px; }
+.crest.sm.ini { font-size: 6.5px; }
+.crest.lg { width: 48px; height: 48px; }
+.crest.lg.ini { font-size: 17px; }
+.vs { display: flex; align-items: center; gap: 12px; margin: 12px 0 -2px; }
+.vs-x { color: var(--mist); font-family: var(--cond); font-size: 22px; }
 .mini { display: flex; gap: 10px; }
 .mini div { display: flex; flex-direction: column; align-items: center; min-width: 38px; }
 .mini b { font-family: var(--cond); font-size: 18px; color: var(--board); font-weight: 700; }

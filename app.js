@@ -65,6 +65,24 @@ function bestEdge(m) { // modelin piyasadan en çok yüksek gördüğü, kupona 
   return best;
 }
 
+/* Takım arması (futbol): yoksa ya da yüklenemezse baş harfler. */
+const NOISE = /^(fc|sk|cf|ac|as|sc|afc|ssc|fk|sv|tsg|vfb|vfl|rc|bv|\d+)$/i;
+function initials(name) {
+  const w = String(name).split(/[\s.\-/]+/).filter((x) => x && !NOISE.test(x));
+  const s = w.length > 1 ? w[0][0] + w[1][0] : (w[0] || "?").slice(0, 2);
+  return s.toUpperCase(); // "Milan" → "MI" (tr-TR kuralı "Mİ" yapardı)
+}
+function crest(m, side, size) {
+  if (m.sport !== "football") return null;
+  const cls = `crest${size ? ` ${size}` : ""}`;
+  const fallback = () => h("span", { class: `${cls} ini`, "aria-hidden": "true" }, initials(m[side]));
+  const src = m.logos && m.logos[side];
+  if (!src) return fallback();
+  const img = h("img", { class: cls, src, alt: "", loading: "lazy", decoding: "async",
+    onerror: () => img.replaceWith(fallback()) });
+  return img;
+}
+
 /* 1X2 olasılık çubuğu: ev / beraberlik / deplasman. */
 const OUT3 = ["home", "draw", "away"];
 function probs3(m, field) {
@@ -182,7 +200,8 @@ function couponCard(day, kind, title, desc) {
     if (!o) return null;
     return h("li", { class: "leg" },
       h("div", { class: "leg-text" }, h("span", { class: "leg-pick" }, o.pick),
-        h("span", { class: "leg-meta" }, `${fmtTime(ref.match.kickoff)}  ${matchLabel(ref.match)}`),
+        h("span", { class: "leg-meta" }, `${fmtTime(ref.match.kickoff)}  `, crest(ref.match, "home", "sm"),
+          ` ${matchLabel(ref.match)} `, crest(ref.match, "away", "sm")),
         started(ref.match) ? h("span", { class: "started" }, "Başladı") : null),
       h("div", { class: "leg-num" }, h("span", { class: "odds" }, odds(o.price)), h("span", { class: "prob" }, pct(o.prob))));
   });
@@ -216,7 +235,9 @@ function viewMatches(root) {
       const edge = bestEdge(m), bar = probs3(m, "prob");
       kids.push(h("a", { class: "match", href: `#/mac/${encodeURIComponent(m.id)}` },
         h("span", { class: "time" }, fmtTime(m.kickoff)),
-        h("span", { class: "teams" }, h("span", {}, m.home), h("span", {}, m.away),
+        h("span", { class: "teams" },
+          h("span", { class: "tm" }, crest(m, "home"), h("span", { class: "nm" }, m.home)),
+          h("span", { class: "tm" }, crest(m, "away"), h("span", { class: "nm" }, m.away)),
           started(m) ? h("span", { class: "started" }, "Başladı") : null),
         h("span", { class: "mini" }, headline(m).map((o) =>
           h("div", {}, h("b", {}, odds(o.price)), h("small", {}, `${short[o.outcome]} ${pct(o.prob)}`)))),
@@ -237,6 +258,8 @@ function viewMatch(root, id) {
   const render = () => viewMatch(root, id);
   const kids = [
     h("a", { class: "back", href: "#/maclar" }, "‹ Maçlar"),
+    m.sport === "football" ? h("div", { class: "vs" }, crest(m, "home", "lg"), h("span", { class: "vs-x" }, "–"),
+      crest(m, "away", "lg")) : null,
     h("h1", {}, matchLabel(m)),
     h("p", { class: "muted small" }, `${m.competition}  ${fmtDateTime(m.kickoff)}`, started(m) ? "  (başladı)" : ""),
   ];
