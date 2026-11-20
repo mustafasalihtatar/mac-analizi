@@ -333,9 +333,59 @@ function viewMatch(root, id) {
         h("span", { class: "odds" }, o.price ? odds(o.price) : "–"));
     })));
   }
+  kids.push(...statsBlock(m));
   if (m.info) kids.push(...infoBlock(m));
   kids.push(note(minor));
   root.replaceChildren(...kids);
+}
+/* Maç öncesi ek istatistikler (LFA özetleri): en olası skorlar + iki takım karşılaştırma tablosu. */
+const XG_GAP = 0.4; // son 5 maçta maç başı gol − xG farkı bu kadarsa not düş
+function statsBlock(m) {
+  const s = m.stats;
+  if (!s) return [];
+  const out = [h("h2", {}, "İstatistikler")];
+  if (s.top_scores && s.top_scores.length) {
+    out.push(h("p", { class: "small muted" }, minorOrModel(m)),
+      h("div", { class: "scores" }, s.top_scores.map((t) => h("span", { class: "score" }, h("b", {}, t.score), pct(t.p)))));
+  }
+  const H = s.home, A = s.away;
+  if (H || A) {
+    const two = (x, k1, k2, dp) => (x && x[k1] != null ? `${x[k1].toFixed(dp)} – ${x[k2].toFixed(dp)}` : "–");
+    const rows = [
+      ["Üst 2.5", (t) => pct(t && t.venue.over25)],
+      ["KG Var", (t) => pct(t && t.venue.btts)],
+      ["Gol yemedi", (t) => pct(t && t.venue.clean_sheet)],
+      ["Gol atamadı", (t) => pct(t && t.venue.failed_to_score)],
+      ["xG (son 5, ort.)", (t) => two(t && t.xg_form, "xg_for", "xg_against", 2)],
+      ["Gol (son 5, ort.)", (t) => two(t && t.xg_form, "goals_for", "goals_against", 2)],
+      ["Korner (maç başı)", (t) => two(t && t.corners, "for", "against", 1)],
+      ["Sarı kart (maç başı)", (t) => two(t && t.yellow, "for", "against", 1)],
+    ];
+    const head = (name, t, where) => h("th", { class: "num" }, h("span", { class: "th-team" }, name),
+      h("small", { class: "muted" }, t ? `${where}, ${t.venue.n} maç` : "veri yok"));
+    out.push(h("div", { class: "table-wrap" }, h("table", { class: "stats-table" },
+      h("thead", {}, h("tr", {}, h("th", {}, ""), head(m.home, H, "iç saha"), head(m.away, A, "dış saha"))),
+      h("tbody", {}, rows.map(([label, f], i) => h("tr", { class: i === 4 ? "sep" : null },
+        h("td", {}, label), h("td", { class: "num" }, f(H)), h("td", { class: "num" }, f(A))))))));
+    const notes = [[m.home, H], [m.away, A]].flatMap(([name, t]) => {
+      const x = t && t.xg_form;
+      if (!x) return [];
+      const att = x.goals_for - x.xg_for, def = x.goals_against - x.xg_against;
+      const n = [];
+      if (att >= XG_GAP) n.push(`${name} son maçlarda xG'sinin üstünde gol atıyor (şanslı gidiyor olabilir).`);
+      if (att <= -XG_GAP) n.push(`${name} son maçlarda xG'sinin altında gol atıyor (fırsatları değerlendiremiyor).`);
+      if (def >= XG_GAP) n.push(`${name} rakiplerin xG'sinden fazla gol yiyor.`);
+      if (def <= -XG_GAP) n.push(`${name} rakiplerin xG'sinden az gol yiyor (kalecisi/şansı iyi gidiyor).`);
+      return n;
+    });
+    out.push(h("p", { class: "small muted" }, "İlk 4 satır bu sezonun maçlarından: ev sahibinin iç saha, deplasman ",
+      "takımının dış saha maçları. 'a – b' = lehine – aleyhine. xG: atılması beklenen gol (pozisyon kalitesi)."));
+    if (notes.length) out.push(h("ul", { class: "xg-notes" }, notes.map((t) => h("li", {}, t))));
+  }
+  return out;
+}
+function minorOrModel(m) {
+  return isMinor(m) ? "En olası skorlar (kendi model):" : "En olası skorlar (sitede gösterilen olasılıklarla):";
 }
 function formRow(rows) {
   if (!rows || !rows.length) return h("p", { class: "muted small" }, "Geçmiş veri yok.");
