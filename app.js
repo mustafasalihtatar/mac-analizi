@@ -41,7 +41,8 @@ const odds = (x) => (x == null ? "–" : Number(x).toFixed(2));
 const tl = (x) => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(x);
 const started = (m) => new Date(m.kickoff) <= new Date();
 const parseNum = (v) => parseFloat(String(v).trim().replace(",", ".")); // "1,75" → 1.75
-const days = () => (DATA ? DATA[state.sport] : []);
+const days = () => (DATA && DATA[state.sport]) || [];
+const isMinor = (m) => m.sport === "minor"; // oranı çekilmeyen lig: sadece kendi model, fiyat yok
 const matchLabel = (m) => `${m.home} – ${m.away}`;
 /* Açılış günü: başlamamış maçı olan ilk gün, yoksa maçı olan ilk gün, o da yoksa bugün. */
 function firstDay() {
@@ -73,7 +74,7 @@ function initials(name) {
   return s.toUpperCase(); // "Milan" → "MI" (tr-TR kuralı "Mİ" yapardı)
 }
 function crest(m, side, size) {
-  if (m.sport !== "football") return null;
+  if (m.sport !== "football" && !isMinor(m)) return null;
   const cls = `crest${size ? ` ${size}` : ""}`;
   const fallback = () => h("span", { class: `${cls} ini`, "aria-hidden": "true" }, initials(m[side]));
   const src = m.logos && m.logos[side];
@@ -96,9 +97,17 @@ function pbar(vals, thin) {
 }
 
 const STALE_MS = 12 * 3600 * 1000;
+const PROGRAM_STALE_MS = 36 * 3600 * 1000; // diğer liglerin maç programı günde bir yenilenir
 function updateHeader() {
   const el = document.getElementById("updated");
   if (!DATA) return;
+  if (state.sport === "minor") {
+    const t = DATA.minor_info && DATA.minor_info.fixtures_updated;
+    const stale = t && Date.now() - new Date(t).getTime() > PROGRAM_STALE_MS;
+    el.textContent = t ? `Maç programı: ${fmtDateTime(t)}${stale ? " (eski olabilir)" : ""}` : "Maç programı: henüz yok";
+    el.classList.toggle("stale", Boolean(stale));
+    return;
+  }
   const name = state.sport === "football" ? "Futbol" : "NBA";
   const t = DATA.odds_updated && DATA.odds_updated[state.sport];
   const stale = t && Date.now() - new Date(t).getTime() > STALE_MS;
@@ -132,8 +141,9 @@ function saveKupon() {
 }
 const inKupon = (key) => state.kupon.some((l) => l.key === key);
 function legFrom(m, o) {
+  const fair = o.price == null; // oranı çekilmeyen lig: adil oranla girer, kullanıcı iddaa oranını yazar
   return { key: o.key, matchId: m.id, pick: o.pick, match: matchLabel(m), competition: m.competition,
-    kickoff: m.kickoff, price: o.price, prob: o.prob };
+    kickoff: m.kickoff, price: fair ? o.fair : o.price, prob: o.prob, fair };
 }
 function toggleOption(m, o) {
   if (inKupon(o.key)) {
@@ -141,7 +151,8 @@ function toggleOption(m, o) {
     toast("Kupondan çıkarıldı");
   } else {
     state.kupon.push(legFrom(m, o));
-    toast(started(m) ? "Kupona eklendi — uyarı: maç başladı" : "Kupona eklendi");
+    toast(started(m) ? "Kupona eklendi — uyarı: maç başladı"
+      : o.price == null ? "Adil oranla eklendi — iddaa oranını Kuponum'da gir" : "Kupona eklendi");
   }
   saveKupon();
 }
@@ -161,25 +172,33 @@ function addCoupon(c) {
 }
 
 /* ---------- ortak parçalar ---------- */
-function sportSwitch(onChange) {
+function sportSwitch(onChange, withMinor) {
   const b = (sport, label) => h("button", { type: "button", "aria-pressed": state.sport === sport,
     onclick: () => { state.sport = sport; state.day = firstDay(); updateHeader(); onChange(); } }, label);
-  return h("div", { class: "seg", role: "group", "aria-label": "Spor" }, b("football", "Futbol"), b("basketball", "NBA"));
+  return h("div", { class: "seg", role: "group", "aria-label": "Spor" }, b("football", "Futbol"), b("basketball", "NBA"),
+    withMinor && DATA && DATA.minor ? b("minor", "Diğer ligler") : null);
+}
+function minorNote() {
+  return h("p", { class: "small muted minor-note" }, "Bu liglerin bahis oranı çekilmiyor: olasılıklar sadece kendi ",
+    "modelimizden (geçmiş maçlar, gol ve xG). Adil oran = 1 / olasılık; iddaa oranı bundan yüksekse model o seçeneği ",
+    "daha olası görüyor. Geçmiş testte model kapanış oranlarının biraz gerisinde kaldı — fikir verir, garanti değildir.");
 }
 function dayChips(onChange) {
   return h("div", { class: "chips", role: "group", "aria-label": "Gün" },
     days().map((d, i) => h("button", { type: "button", class: "chip", "aria-pressed": state.day === i,
       onclick: () => { state.day = i; onChange(); } }, d.label, h("span", { class: "n" }, d.matches.length))));
 }
-function note() {
-  return h("p", { class: "note" }, "Oranlar uluslararası bahis şirketlerinden; iddaa oranları farklı olabilir. ",
-    "Olasılıklar oranlardan hesaplanır, hiçbir kupon garanti değildir.",
+function note(minor) {
+  return h("p", { class: "note" }, minor
+    ? "Bu liglerde olasılıklar sadece kendi modelden; hiçbir tahmin garanti değildir."
+    : "Oranlar uluslararası bahis şirketlerinden; iddaa oranları farklı olabilir. Olasılıklar oranlardan hesaplanır, hiçbir kupon garanti değildir.",
     DATA ? ` Site yayını: ${fmtDateTime(DATA.generated_at)}.` : "");
 }
 
 /* ---------- görünüm: kuponlar ---------- */
 function viewCoupons(root) {
   const render = () => viewCoupons(root);
+  if (state.sport === "minor") { state.sport = "football"; state.day = firstDay(); updateHeader(); } // oran yok → kupon yok
   const day = days()[state.day];
   root.replaceChildren(
     h("h1", {}, "Günün kuponları"),
@@ -218,13 +237,14 @@ function couponCard(day, kind, title, desc) {
 
 /* ---------- görünüm: maçlar ---------- */
 function headline(m) {
-  const get = (o) => m.options.find((x) => x.market === "h2h" && x.outcome === o && x.price);
+  const get = (o) => m.options.find((x) => x.market === "h2h" && x.outcome === o && (x.price || isMinor(m)));
   return ["home", "draw", "away"].map(get).filter(Boolean);
 }
 function viewMatches(root) {
   const render = () => viewMatches(root);
   const day = days()[state.day];
-  const kids = [h("h1", {}, "Maçlar"), sportSwitch(render), dayChips(render)];
+  const kids = [h("h1", {}, "Maçlar"), sportSwitch(render, true), dayChips(render)];
+  if (state.sport === "minor") kids.push(minorNote());
   if (!day || !day.matches.length) {
     kids.push(h("p", { class: "empty" }, "Bu gün için maç yok."));
   } else {
@@ -239,14 +259,15 @@ function viewMatches(root) {
           h("span", { class: "tm" }, crest(m, "home"), h("span", { class: "nm" }, m.home)),
           h("span", { class: "tm" }, crest(m, "away"), h("span", { class: "nm" }, m.away)),
           started(m) ? h("span", { class: "started" }, "Başladı") : null),
-        h("span", { class: "mini" }, headline(m).map((o) =>
-          h("div", {}, h("b", {}, odds(o.price)), h("small", {}, `${short[o.outcome]} ${pct(o.prob)}`)))),
+        h("span", { class: isMinor(m) ? "mini model-only" : "mini" }, headline(m).map((o) => isMinor(m)
+          ? h("div", {}, h("b", {}, pct(o.prob)), h("small", {}, `${short[o.outcome]} ${odds(o.fair)}`))
+          : h("div", {}, h("b", {}, odds(o.price)), h("small", {}, `${short[o.outcome]} ${pct(o.prob)}`)))),
         bar ? pbar(bar, true) : null,
         edge ? h("span", { class: "edge" }, h("span", { class: "edge-tag" }, `Model ${pts(diffOf(edge))}`),
           ` ${edge.pick}`) : null));
     }
   }
-  kids.push(note());
+  kids.push(note(state.sport === "minor"));
   root.replaceChildren(...kids);
 }
 
@@ -258,28 +279,31 @@ function viewMatch(root, id) {
   const render = () => viewMatch(root, id);
   const kids = [
     h("a", { class: "back", href: "#/maclar" }, "‹ Maçlar"),
-    m.sport === "football" ? h("div", { class: "vs" }, crest(m, "home", "lg"), h("span", { class: "vs-x" }, "–"),
+    m.sport !== "basketball" ? h("div", { class: "vs" }, crest(m, "home", "lg"), h("span", { class: "vs-x" }, "–"),
       crest(m, "away", "lg")) : null,
     h("h1", {}, matchLabel(m)),
     h("p", { class: "muted small" }, `${m.competition}  ${fmtDateTime(m.kickoff)}`, started(m) ? "  (başladı)" : ""),
   ];
   const e = m.expected;
-  kids.push(m.sport === "football"
+  kids.push(m.sport !== "basketball"
     ? h("div", { class: "expected" }, h("div", {}, h("span", { class: "small muted" }, `${m.home} beklenen gol`), h("b", {}, e.home.toFixed(2))),
         h("div", {}, h("span", { class: "small muted" }, `${m.away} beklenen gol`), h("b", {}, e.away.toFixed(2))))
     : h("div", { class: "expected" }, h("div", {}, h("span", { class: "small muted" }, `${m.home} beklenen fark`), h("b", {}, (e.margin > 0 ? "+" : "") + e.margin.toFixed(1))),
         e.total != null ? h("div", {}, h("span", { class: "small muted" }, "Beklenen toplam"), h("b", {}, e.total.toFixed(1))) : null));
 
-  const pm = probs3(m, "market_prob"), pmod = probs3(m, "model_prob");
-  if (pm) {
+  const minor = isMinor(m);
+  const pm = minor ? null : probs3(m, "market_prob"), pmod = probs3(m, minor ? "prob" : "model_prob");
+  if (pm || pmod) {
     const names = [m.home, "Beraberlik", m.away];
     kids.push(h("div", { class: "pbars" },
-      h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Piyasa"), pbar(pm)),
+      pm ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Piyasa"), pbar(pm)) : null,
       pmod ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Model"), pbar(pmod)) : null,
       h("div", { class: "pbar-legend" }, names.map((n, i) =>
         h("span", {}, h("i", { class: `dot seg-${OUT3[i]}` }), n)))));
   }
-  kids.push(h("p", { class: "small muted" }, "Seçeneğe dokununca kupona eklenir; tekrar dokununca çıkar. ",
+  if (minor) kids.push(minorNote(), h("p", { class: "small muted" },
+    "Seçeneğe dokununca adil oranla kupona eklenir; Kuponum'da iddaa oranını yazabilirsin."));
+  else kids.push(h("p", { class: "small muted" }, "Seçeneğe dokununca kupona eklenir; tekrar dokununca çıkar. ",
     "Piyasa: oranlardan bahis şirketi payı ayıklanmış olasılık. Model: oranlara bakmadan geçmiş maçlardan (gol ve xG) ",
     "kurduğumuz model; Süper Lig, 5 büyük lig ve Avrupa kupalarında, diğerlerinde –. ",
     `Model piyasadan ${Math.round(EDGE * 100)}+ puan ayrılınca işaretlenir (yeşil: model daha yüksek görüyor). `,
@@ -290,6 +314,12 @@ function viewMatch(root, id) {
     if (!opts.length) continue;
     kids.push(h("h2", {}, title));
     kids.push(h("div", { class: "options" }, opts.map((o) => {
+      if (minor) {
+        return h("button", { type: "button", class: "opt", "aria-pressed": inKupon(o.key),
+          onclick: () => { toggleOption(m, o); render(); } },
+          h("span", { class: "p" }, h("span", {}, o.pick), h("span", { class: "prob model" }, `Model ${pct(o.prob)}`)),
+          h("span", { class: "fairbox" }, h("span", { class: "odds fair" }, odds(o.fair)), h("small", {}, "adil")));
+      }
       const d = diffOf(o);
       const flag = d != null && Math.abs(d) >= EDGE;
       return h("button", { type: "button", class: flag ? (d > 0 ? "opt up" : "opt down") : "opt", disabled: !o.addable,
@@ -304,7 +334,7 @@ function viewMatch(root, id) {
     })));
   }
   if (m.info) kids.push(...infoBlock(m));
-  kids.push(note());
+  kids.push(note(minor));
   root.replaceChildren(...kids);
 }
 function formRow(rows) {
@@ -355,11 +385,12 @@ function viewKupon(root) {
   const card = h("div", { class: "card" },
     legs.map((l) => h("div", { class: "kleg" },
       h("div", { class: "leg-text" }, h("span", { class: "leg-pick" }, l.pick),
-        h("span", { class: "leg-meta" }, `${fmtTime(l.kickoff)}  ${l.match}`), h("span", { class: "prob" }, `Olasılık ${pct(l.prob)}`)),
+        h("span", { class: "leg-meta" }, `${fmtTime(l.kickoff)}  ${l.match}`), h("span", { class: "prob" }, `Olasılık ${pct(l.prob)}`),
+        l.fair ? h("span", { class: "warn" }, "Adil oran — iddaa oranını yaz") : null),
       h("input", { type: "text", inputmode: "decimal", autocomplete: "off", value: odds(l.price), "aria-label": `${l.pick} oranı`,
         onchange: (ev) => {
           const v = parseNum(ev.target.value);
-          if (v > 1) { l.price = Math.round(v * 100) / 100; saveKupon(); } else toast("Oran 1'den büyük olmalı");
+          if (v > 1) { l.price = Math.round(v * 100) / 100; l.fair = false; saveKupon(); } else toast("Oran 1'den büyük olmalı");
           render();
         } }),
       h("button", { type: "button", class: "icon", "aria-label": `${l.pick} seçimini çıkar`,
@@ -385,7 +416,7 @@ function viewKupon(root) {
   root.replaceChildren(...kids, card, note());
 }
 function shareLink(legs, total, totalProb) {
-  const lines = ["Kuponum (Maç Analiz)", ...legs.map((l) => `• ${l.pick} — ${l.match} @${odds(l.price)}`),
+  const lines = ["Kuponum (Maç Analiz)", ...legs.map((l) => `• ${l.pick} — ${l.match} @${odds(l.price)}${l.fair ? " (adil)" : ""}`),
     `Toplam oran: ${odds(total)}  Tutma ihtimali: ${pct(totalProb)}`];
   return `https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`;
 }
@@ -429,7 +460,7 @@ function viewPerformance(root) {
       "Süper Lig, 5 büyük lig, Şampiyonlar Ligi ve Avrupa Ligi; sonuçlar maçtan sonraki ilk güncellemede eklenir.")];
   if (!p || !p.n) {
     kids.push(h("p", { class: "empty" }, "Canlı ölçüm: henüz sonuçlanmış maç yok. Maçlar bittikçe burada görünecek."),
-      ...backtestBlock(), note());
+      ...backtestBlock(), ...minorBlock(), note());
     root.replaceChildren(...kids);
     return;
   }
@@ -478,8 +509,30 @@ function viewPerformance(root) {
           OUT.map((k) => h("td", { class: k === won ? (k === fav ? "num hit" : "num act") : "num" }, pct(r[`p_${k}`]))));
       })))),
     h("p", { class: "small muted" }, "Yeşil: favori dediğimiz sonuç oldu. Sarı: gerçekleşen sonuç (favori değildi)."));
-  kids.push(...backtestBlock(), note());
+  kids.push(...backtestBlock(), ...minorBlock(), note());
   root.replaceChildren(...kids);
+}
+function minorBlock() {
+  const b = DATA.minor_info && DATA.minor_info.backtest;
+  if (!b) return [];
+  const out = [h("h2", {}, "Diğer ligler (sadece model)"),
+    h("p", { class: "muted" }, "Oranı çekilmeyen 8 ligde kendi modelin geçmiş testi: her hafta sadece o haftadan önceki ",
+      "maçlarla kuruldu, gerçek sonuçlarla karşılaştırıldı."),
+    h("div", { class: "stats" },
+      h("div", {}, h("span", { class: "small muted" }, "Test edilen maç"), h("b", {}, b.n.toLocaleString("tr-TR"))),
+      h("div", {}, h("span", { class: "small muted" }, "Favori tuttu"), h("b", {}, pct(b.accuracy))),
+      h("div", {}, h("span", { class: "small muted" }, "Brier (kıyas 0.667)"), h("b", {}, brier(b.brier)))),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Lig"), h("th", { class: "num" }, "Maç"), h("th", { class: "num" }, "Favori tuttu"))),
+      h("tbody", {}, (b.leagues || []).map((l) => h("tr", {}, h("td", {}, l.name), h("td", { class: "num" }, l.n),
+        h("td", { class: "num" }, pct(l.accuracy)))))))];
+  if (b.calibration && b.calibration.length) {
+    out.push(h("h3", { class: "sub" }, "Modelin olasılıkları ne kadar dürüst?"),
+      h("div", { class: "card calib-card" }, calibrationChart(b.calibration)),
+      h("p", { class: "small muted" }, "Orta aralıkta noktalar çizgiye yakın. Uçlarda model temkinli: çok güçlü favoriler ",
+        "dediğinden biraz daha sık kazanıyor, sürprizler biraz daha seyrek oluyor."));
+  }
+  return out;
 }
 function backtestBlock() {
   const b = DATA.backtest;
@@ -548,8 +601,8 @@ async function init() {
     document.getElementById("view").replaceChildren(h("p", { class: "empty" }, "Veri yüklenemedi; sayfayı yenileyin."));
     return;
   }
-  for (const sport of ["football", "basketball"]) {
-    for (const d of DATA[sport]) for (const m of d.matches) byId.set(m.id, { match: m, sport });
+  for (const sport of ["football", "basketball", "minor"]) {
+    for (const d of DATA[sport] || []) for (const m of d.matches) byId.set(m.id, { match: m, sport });
   }
   state.day = firstDay();
   updateHeader();

@@ -95,6 +95,12 @@ h3 { font-family: var(--cond); font-weight: 700; font-size: 20px; margin: 0; }
 .mini div { display: flex; flex-direction: column; align-items: center; min-width: 36px; }
 .mini b { font-family: var(--cond); font-size: 18px; color: var(--board); font-weight: 700; }
 .mini small { color: var(--mist); font-size: 11px; }
+/* oranı olmayan lig: büyük sayı model olasılığı (sarı = oran olduğu için açık renk), altta adil oran */
+.mini.model-only b { color: var(--light); }
+.minor-note { margin: 0 0 4px; }
+.fairbox { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+.odds.fair { color: var(--mist); }
+.fairbox small { color: var(--mist); font-size: 11px; line-height: 1.1; }
 .started { color: var(--red); font-size: 12px; }
 .match .pbar.thin { grid-column: 1 / -1; margin-top: -2px; }
 .edge { grid-column: 1 / -1; font-size: 13px; color: var(--mist); margin-top: -4px;
