@@ -167,7 +167,8 @@ const History = (() => {
   function newId() {
     return `k${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   }
-  /* Sepetten oynanan kupon. legs: app.js kupon seçimleri (key, matchId, pick, match, competition, kickoff, price, prob, src). */
+  /* Sepetten oynanan kupon. legs: app.js kupon seçimleri (key, matchId, pick, match, competition, kickoff, price, prob, src,
+     verified). verified === false: oran iddaa'dan girilmedi (yurtdışı ya da adil oran) → kupon "oran doğrulanmadı" (§29). */
   function makeCoupon(legs, stake, type, now) {
     const price = legs.reduce((a, l) => a * num(l.price), 1);
     const probs = legs.map((l) => l.prob);
@@ -175,10 +176,10 @@ const History = (() => {
     const at = (now || new Date()).toISOString();
     return {
       id: newId(), playedAt: at, updatedAt: at, type: normType(type), stake: round2(num(stake)),
-      totalOdds: round2(price), totalProb,
+      totalOdds: round2(price), totalProb, unverified: legs.some((l) => l.verified === false),
       legs: legs.map((l) => ({ key: l.key, matchId: l.matchId, pick: l.pick, match: l.match, competition: l.competition || "",
         kickoff: l.kickoff, price: round2(num(l.price)), prob: finite(l.prob) ? num(l.prob) : null, fair: !!l.fair,
-        status: null, score: null, manual: null })),
+        verified: l.verified !== false, status: null, score: null, manual: null })),
     };
   }
   const emptyStore = () => ({ version: VERSION, budget: null, coupons: [] });
@@ -207,7 +208,8 @@ const History = (() => {
   function normalizeCoupon(c) {
     return { ...c, type: normType(c.type), stake: num(c.stake), totalOdds: num(c.totalOdds),
       totalProb: c.totalProb == null ? null : num(c.totalProb), updatedAt: c.updatedAt || c.playedAt,
-      legs: c.legs.map((l) => ({ ...l, price: num(l.price), prob: l.prob == null ? null : num(l.prob),
+      unverified: c.unverified === true, // §29 öncesi kayıtlarda alan yok → doğrulanmış sayılır
+      legs: c.legs.map((l) => ({ ...l, price: num(l.price), prob: l.prob == null ? null : num(l.prob), verified: l.verified !== false,
         status: l.status || null, score: l.score == null ? null : String(l.score), manual: l.manual || null })) };
   }
   /* Metin (yedek dosyası ya da localStorage) → {ok, store} | {ok: false, error}. */

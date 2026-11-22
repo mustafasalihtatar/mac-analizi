@@ -166,6 +166,31 @@ h3 { font-family: var(--cond); font-weight: 700; font-size: 20px; margin: 0; }
 .opt .p span:first-child { font-weight: 500; line-height: 1.25; }
 .opt .prob.model { color: var(--light); opacity: .85; }
 .opt.up { border-color: rgba(124, 217, 146, .55); }
+/* §29 iddaa oranı kutusu ve beklenen değer rozeti (renk + yazı) */
+.optcell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.optcell .opt { flex: 1; }
+.iddaa-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 0 2px; font-size: 12px; }
+.iddaa-lbl { color: var(--mist); }
+.iddaa-in { width: 62px; background: var(--pitch); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px;
+  text-align: right; font-size: 14px; }
+.iddaa-in[aria-invalid="true"], .kleg input[aria-invalid="true"] { border-color: var(--red); }
+.ev { border-radius: 5px; padding: 1px 6px; font-weight: 600; font-size: 12px; line-height: 1.5; }
+.ev-value { background: var(--green); color: var(--pitch); }
+.ev-fair { background: rgba(157, 184, 172, .22); color: var(--light); }
+.ev-model { background: none; border: 1px solid var(--line); color: var(--mist); font-weight: 500; }
+.ev-low { background: rgba(229, 72, 77, .25); color: #FFB3B5; }
+.ev-bad { color: #FFB3B5; font-weight: 500; padding: 0; }
+.iddaa-margin { margin: 8px 0 0; }
+.iddaa-margin b { color: var(--board); }
+.iddaa-note { margin: 0 0 4px; }
+.kupon-ev { margin-top: 10px; }
+.kupon-ev .ev { font-size: 15px; padding: 3px 10px; }
+.leg-ev { display: block; margin-top: 2px; }
+.play-missing { margin-top: 12px; }
+.play-missing h4 { margin: 0 0 2px; font-size: 15px; }
+.play-leg { grid-template-columns: 1fr 86px; }
+.ok-text { color: var(--green); }
+.pill.unv { color: var(--board); border-color: var(--board); }
 .diff { margin-left: 6px; border-radius: 5px; padding: 0 5px; font-weight: 600; font-size: 11px; }
 .diff.up { background: var(--green); color: var(--pitch); }
 .diff.down { background: rgba(229, 72, 77, .25); color: #FFB3B5; }

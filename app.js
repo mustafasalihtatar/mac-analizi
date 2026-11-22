@@ -1,11 +1,13 @@
 /* Maç Analiz — arkadaş sitesi. Veri: data.json (yerel uygulamadan yayınlanır).
    Tüm metinler textContent ile yazılır; kupon ve kupon geçmişi (tutarlar dahil) sadece bu cihazın tarayıcısında
-   saklanır, hiçbir yere gönderilmez. Geçmiş hesapları history.js'te (History). */
+   saklanır, hiçbir yere gönderilmez. Geçmiş hesapları history.js'te (History), elle girilen iddaa oranları ve
+   beklenen değer iddaa.js'te (Iddaa, §29). */
 "use strict";
 
 const TZ = "Europe/Istanbul";
 const STORE = "macanaliz.kupon.v1";
 const HSTORE = "macanaliz.gecmis.v1"; // §27 oynanan kuponlar + aylık bütçe
+const ISTORE = "macanaliz.iddaa.v1"; // §29 elle girilen iddaa oranları (maç detayı, Kuponum, Oynadım ortak)
 const KINDS = [
   ["safe", History.TYPE_NAMES.safe, "Tutma olasılığı görece yüksek, oranı düşük. Hiçbir kupon garanti değildir."],
   ["risky", "Riskli", "Risk almayan viski içemez."],
@@ -19,6 +21,7 @@ let DATA = null;
 const state = { sport: "football", day: 0, kupon: loadKupon(), stake: 10, playing: false, histMsg: null,
   historyError: null };
 state.history = loadHistory();
+state.iddaa = loadIddaa();
 const byId = new Map(); // maç id → {match, sport}
 
 /* ---------- yardımcılar ---------- */
@@ -152,7 +155,7 @@ const inKupon = (key) => state.kupon.some((l) => l.key === key);
 function legFrom(m, o, src) {
   const fair = o.price == null; // oranı çekilmeyen lig: adil oranla girer, kullanıcı iddaa oranını yazar
   return { key: o.key, matchId: m.id, pick: o.pick, match: matchLabel(m), competition: m.competition,
-    kickoff: m.kickoff, price: fair ? o.fair : o.price, prob: o.prob, fair, src }; // src: safe|risky|slip|own
+    kickoff: m.kickoff, price: fair ? o.fair : o.price, prob: o.prob, fair, src, model: isMinor(m) }; // src: safe|risky|slip|own
 }
 function toggleOption(m, o) {
   if (inKupon(o.key)) {
@@ -161,7 +164,8 @@ function toggleOption(m, o) {
   } else {
     state.kupon.push(legFrom(m, o, "own"));
     toast(started(m) ? "Kupona eklendi — uyarı: maç başladı"
-      : o.price == null ? "Adil oranla eklendi — iddaa oranını Kuponum'da gir" : "Kupona eklendi");
+      : iddaaOf(m.id, o.key) != null ? "Kupona iddaa oranıyla eklendi"
+      : o.price == null ? "Adil oranla eklendi — iddaa oranını yaz" : "Kupona eklendi");
   }
   saveKupon();
 }
@@ -178,6 +182,101 @@ function addCoupon(c, kind) {
   saveKupon();
   const warn = late ? ` — uyarı: ${late} maç başladı` : "";
   toast(added ? `${added} seçim kupona eklendi${warn}` : "Bu seçimler zaten kuponda");
+}
+
+/* ---------- iddaa oranları (localStorage, §29) ----------
+   Tek kayıt: maç detayında, Kuponum'da ve Oynadım formunda girilen oran aynı yere yazılır. Kupondaki seçimin oranı:
+   iddaa kaydı varsa o, yoksa seçimin eklendiği andaki oran (yurtdışı ya da adil). Maç başladıktan 24 saat sonra silinir. */
+function loadIddaa() {
+  let s = Iddaa.emptyStore();
+  try {
+    const raw = localStorage.getItem(ISTORE);
+    if (raw != null) s = Iddaa.parseStore(raw);
+  } catch { /* gizli sekme, kayıt alanı kapalı: oranlar bu oturumda bellekte kalır */ }
+  if (Iddaa.prune(s, new Date())) persistIddaa(s);
+  return s;
+}
+function persistIddaa(s) {
+  try { localStorage.setItem(ISTORE, Iddaa.serialize(s)); return true; } catch { return false; }
+}
+/* price null → o seçeneğin iddaa oranı silinir. */
+function setIddaa(matchId, kickoff, key, price) {
+  Iddaa.prune(state.iddaa, new Date());
+  if (!Iddaa.set(state.iddaa, matchId, kickoff, key, price)) return false;
+  if (!persistIddaa(state.iddaa)) toast("iddaa oranı bu cihaza kaydedilemedi (tarayıcı kayıt alanı kapalı ya da dolu)");
+  return true;
+}
+const iddaaOf = (matchId, key) => Iddaa.get(state.iddaa, matchId, key);
+const legPrice = (l) => iddaaOf(l.matchId, l.key) ?? Number(l.price);
+const legVerified = (l) => iddaaOf(l.matchId, l.key) != null;
+const legModel = (l) => !!l.model || String(l.matchId).startsWith("lfa-"); // diğer ligler: olasılık model tahmini
+/* §29 öncesi Kuponum'da elle yazılan oranlar (adil oranla eklenen seçimlerde fair=false olurdu) iddaa kaydına taşınır. */
+function migrateKuponOdds() {
+  let n = 0;
+  for (const l of state.kupon) {
+    if (l.fair === false && legModel(l) && !legVerified(l) && setIddaa(l.matchId, l.kickoff, l.key, Number(l.price))) {
+      l.fair = true; n++;
+    }
+  }
+  if (n) saveKupon();
+}
+const bandPct = () => Math.round(Iddaa.EV_BANDS.value * 100);
+/* Beklenen değer rozeti: renk + yazı (değerli / adil / düşük). model: olasılık doğrulanmamış model (diğer ligler) →
+   renk yok (nötr), "doğrulanmamış model" yazar. */
+function evBadge(ev, model, long) {
+  const lab = Iddaa.evLabel(ev, model);
+  if (!lab) return null;
+  return h("span", { class: `ev ev-${lab.band}`, title: long ? null : "Beklenen değer = olasılık × iddaa oranı − 1" },
+    `${long ? "Beklenen değer" : "BD"} ${lab.text}`);
+}
+/* Maç detayında seçeneğin altındaki iddaa oranı kutusu. onLive: yazarken (kar payı satırı için). */
+function iddaaRow(m, o, model, onLive) {
+  const saved = iddaaOf(m.id, o.key);
+  const out = h("span", { class: "ev-out", "aria-live": "polite" });
+  let input = null;
+  const show = (text) => { // → oran | null (boş) | undefined (geçersiz)
+    const t = String(text).trim();
+    input.removeAttribute("aria-invalid");
+    if (!t) { out.replaceChildren(); return null; }
+    const v = Iddaa.parseOdds(t);
+    if (v == null) {
+      input.setAttribute("aria-invalid", "true");
+      out.replaceChildren(h("span", { class: "ev ev-bad" }, "Geçersiz: 1'den büyük oran yaz"));
+      return undefined;
+    }
+    out.replaceChildren(evBadge(Iddaa.expectedValue(o.prob, v), model) || "");
+    return v;
+  };
+  input = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", class: "iddaa-in", placeholder: "oran",
+    value: saved == null ? "" : odds(saved), "aria-label": `${o.pick} iddaa oranı`,
+    oninput: (ev) => { show(ev.target.value); if (onLive) onLive(); },
+    onchange: (ev) => {
+      const v = show(ev.target.value);
+      if (v === undefined) { toast("Oran 1'den büyük bir sayı olmalı (1,85 ya da 1.85)"); return; }
+      setIddaa(m.id, m.kickoff, o.key, v);
+      if (v != null) ev.target.value = odds(v);
+      if (onLive) onLive();
+    } });
+  show(input.value);
+  return { el: h("label", { class: "iddaa-row" }, h("span", { class: "iddaa-lbl" }, "iddaa"), input, out), input, o };
+}
+const pctPlain = (x) => Iddaa.formatPct(x).replace(/^\+/, "");
+/* MS kar payı: maçın tüm MS sonuçlarının iddaa oranı girilince (futbol 1-X-2, NBA 1-2). */
+function marginLine(m, rows) {
+  const el = h("p", { class: "small muted iddaa-margin", "aria-live": "polite" });
+  const update = () => {
+    const vals = rows.map((r) => Iddaa.parseOdds(r.input.value));
+    const mg = Iddaa.margin(vals);
+    if (mg == null || vals.length !== outsOf(m).length) {
+      el.replaceChildren(m.sport === "basketball" ? "İki takımın iddaa oranını girince iddaa'nın bu maçtaki kar payı hesaplanır."
+        : "MS1, MSX ve MS2'nin üçünü girince iddaa'nın bu maçtaki kar payı hesaplanır.");
+      return;
+    }
+    el.replaceChildren("iddaa kar payı (MS): ", h("b", {}, pctPlain(mg)),
+      m.sport === "basketball" ? " — 1/o1 + 1/o2 − 1" : " — 1/o1 + 1/oX + 1/o2 − 1", "; kar payı yüksekse oranlar düşüktür.");
+  };
+  update();
+  return { el, update };
 }
 
 /* ---------- kupon geçmişi (localStorage, §27) ---------- */
@@ -372,7 +471,7 @@ function viewMatch(root, id) {
         h("span", {}, h("i", { class: `dot seg-${outs[i]}` }), n)))));
   }
   if (minor) kids.push(minorNote(), h("p", { class: "small muted" },
-    "Seçeneğe dokununca adil oranla kupona eklenir; Kuponum'da iddaa oranını yazabilirsin."));
+    "Seçeneğe dokununca kupona eklenir; iddaa oranını seçeneğin altına yazarsan kupona o oranla geçer, yoksa adil oranla."));
   else if (m.sport === "basketball") kids.push(h("p", { class: "small muted" }, "Seçeneğe dokununca kupona eklenir; tekrar dokununca çıkar. ",
     "Piyasa: oranlardan bahis şirketi payı ayıklanmış olasılık. Model: oranlara bakmadan son 3 sezonun NBA maçlarından ",
     "kurduğumuz model (hücum/savunma rating'i, pace, ev avantajı, dinlenme ve resmi sakatlık raporundaki eksikler). ",
@@ -386,11 +485,33 @@ function viewMatch(root, id) {
     "Geçmiş testte piyasa daha isabetli çıktı; fark bir fikir verir, kesin değer değildir. ",
     pbl ? blendNote() : "",
     "Model gol sayısını genelde piyasadan az bekliyor; alt/üst farklarına bu gözle bakın."));
+  kids.push(h("p", { class: "small muted iddaa-note" },
+    `iddaa oranını seçeneğin altındaki kutuya yaz (1,85 ya da 1.85): beklenen değer (BD) = olasılık × oran − 1. `,
+    minor ? "" : `+%${bandPct()} üstü değerli, −%${bandPct()} altı düşük, arası adil. `,
+    minor ? "Bu ligde piyasa yok ve model doğrulanmamış: BD renklendirilmez, \"doğrulanmamış model\" diye yazılır. " : "Olasılık, sitede gösterilen olasılıktır (MS'de harman ya da piyasa, diğer pazarlarda piyasa). ",
+    "Oran sadece bu cihazda saklanır, Kuponum'a da geçer; maç başladıktan 24 saat sonra silinir."));
   for (const [market, title] of Object.entries(GROUPS)) {
     const opts = m.options.filter((o) => o.market === market);
     if (!opts.length) continue;
     kids.push(h("h2", {}, title));
+    const rows = [];
+    let margin = null;
+    const live = market === "h2h" ? () => margin && margin.update() : null;
     kids.push(h("div", { class: "options" }, opts.map((o) => {
+      const row = iddaaRow(m, o, minor, live);
+      rows.push(row);
+      return h("div", { class: "optcell" }, optButton(o), row.el);
+    })));
+    if (market === "h2h") { margin = marginLine(m, rows); kids.push(margin.el); }
+  }
+  kids.push(...statsBlock(m));
+  kids.push(...injuryBlock(m));
+  kids.push(...nbaBlock(m));
+  if (m.info) kids.push(...infoBlock(m));
+  kids.push(note(minor));
+  root.replaceChildren(...kids);
+
+  function optButton(o) {
       if (minor) {
         return h("button", { type: "button", class: "opt", "aria-pressed": inKupon(o.key),
           onclick: () => { toggleOption(m, o); render(); } },
@@ -410,14 +531,7 @@ function viewMatch(root, id) {
           h("span", { class: "prob model" }, `Model ${pct(o.model_prob)}`,
             flag ? h("span", { class: d > 0 ? "diff up" : "diff down" }, pts(d)) : null)),
         h("span", { class: "odds" }, o.price ? odds(o.price) : "–"));
-    })));
   }
-  kids.push(...statsBlock(m));
-  kids.push(...injuryBlock(m));
-  kids.push(...nbaBlock(m));
-  if (m.info) kids.push(...infoBlock(m));
-  kids.push(note(minor));
-  root.replaceChildren(...kids);
 }
 /* Maç öncesi ek istatistikler (LFA özetleri): en olası skorlar + iki takım karşılaştırma tablosu. */
 const XG_GAP = 0.4; // son 5 maçta maç başı gol − xG farkı bu kadarsa not düş
@@ -571,9 +685,12 @@ function viewKupon(root) {
     root.replaceChildren(...kids, note());
     return;
   }
-  const total = legs.reduce((a, l) => a * (Number(l.price) || 1), 1);
+  const total = legs.reduce((a, l) => a * (legPrice(l) || 1), 1);
   const probs = legs.map((l) => l.prob);
   const totalProb = probs.every((p) => p != null) ? probs.reduce((a, p) => a * p, 1) : null;
+  const totalEV = Iddaa.couponEV(legs.map((l) => ({ prob: l.prob, price: legPrice(l) })));
+  const unverified = legs.filter((l) => !legVerified(l)).length;
+  const anyModel = legs.some(legModel);
   const counts = {};
   legs.forEach((l) => { counts[l.matchId] = (counts[l.matchId] || 0) + 1; });
   const dup = [...new Set(legs.filter((l) => counts[l.matchId] > 1).map((l) => l.match))];
@@ -582,12 +699,18 @@ function viewKupon(root) {
   const card = h("div", { class: "card" },
     legs.map((l) => h("div", { class: "kleg" },
       h("div", { class: "leg-text" }, h("span", { class: "leg-pick" }, l.pick),
-        h("span", { class: "leg-meta" }, `${fmtTime(l.kickoff)}  ${l.match}`), h("span", { class: "prob" }, `Olasılık ${pct(l.prob)}`),
-        l.fair ? h("span", { class: "warn" }, "Adil oran — iddaa oranını yaz") : null),
-      h("input", { type: "text", inputmode: "decimal", autocomplete: "off", value: odds(l.price), "aria-label": `${l.pick} oranı`,
+        h("span", { class: "leg-meta" }, `${fmtTime(l.kickoff)}  ${l.match}`),
+        h("span", { class: "prob" }, `Olasılık ${pct(l.prob)}${legModel(l) ? " (model tahmini)" : ""}`),
+        legVerified(l) ? h("span", { class: "leg-ev" }, h("span", { class: "small muted" }, "iddaa oranı "),
+          evBadge(Iddaa.expectedValue(l.prob, legPrice(l)), legModel(l)))
+          : h("span", { class: "warn" }, l.fair ? "Adil oran — iddaa oranını yaz" : "Yurtdışı oran — iddaa oranını yaz")),
+      h("input", { type: "text", inputmode: "decimal", autocomplete: "off", value: odds(legPrice(l)), "aria-label": `${l.pick} iddaa oranı`,
         onchange: (ev) => {
-          const v = parseNum(ev.target.value);
-          if (v > 1) { l.price = Math.round(v * 100) / 100; l.fair = false; saveKupon(); } else toast("Oran 1'den büyük olmalı");
+          const t = ev.target.value.trim();
+          const v = Iddaa.parseOdds(t);
+          if (!t) setIddaa(l.matchId, l.kickoff, l.key, null); // boş: iddaa oranı silinir, eklendiği oran geri gelir
+          else if (v != null) setIddaa(l.matchId, l.kickoff, l.key, v);
+          else toast("Oran 1'den büyük bir sayı olmalı (1,85 ya da 1.85)");
           render();
         } }),
       h("button", { type: "button", class: "icon", "aria-label": `${l.pick} seçimini çıkar`,
@@ -595,6 +718,10 @@ function viewKupon(root) {
     h("div", { class: "total" },
       h("div", {}, h("span", { class: "small muted" }, "Toplam oran"), h("span", { class: "big" }, odds(total))),
       h("div", { class: "r" }, h("span", { class: "small muted" }, "Tutma ihtimali"), h("span", { class: "mid" }, pct(totalProb)))),
+    h("div", { class: "kupon-ev" }, totalEV == null ? h("span", { class: "small muted" }, "Beklenen değer: –")
+      : evBadge(totalEV, anyModel, true)),
+    unverified ? h("p", { class: "small muted" }, `${unverified} seçimde iddaa oranı yok; beklenen değer ve toplam oran o seçimlerde `,
+      "yurtdışı ya da adil oranla hesaplandı.") : null,
     h("label", { class: "stake" }, h("span", {}, "Tutar (TL)"),
       h("input", { type: "text", inputmode: "decimal", autocomplete: "off", value: String(state.stake).replace(".", ","),
         "aria-label": "Tutar (TL)",
@@ -606,7 +733,9 @@ function viewKupon(root) {
       h("span", { class: "muted" }, "Olası kazanç ", h("b", {}, tl(state.stake * total)))),
     dup.length ? h("p", { class: "warn" }, `Aynı maçtan birden fazla seçim: ${dup.join(", ")}. Bahis siteleri kabul etmeyebilir.`) : null,
     late.length ? h("p", { class: "warn" }, `Başlamış maç: ${late.join(", ")}`) : null,
-    h("p", { class: "small muted" }, "Oranları iddaa'da gördüğün değerlerle değiştirebilirsin. Tutma ihtimali maçların bağımsız olduğu varsayımıyla hesaplanır."),
+    h("p", { class: "small muted" }, "Oranları iddaa'da gördüğün değerlerle değiştirebilirsin; maç detayındaki iddaa oranıyla aynı kayıttır ",
+      "(kutuyu boşaltırsan seçimin eklendiği orana döner). Tutma ihtimali ve beklenen değer (Π olasılık × Π oran − 1) maçların ",
+      "bağımsız olduğu varsayımıyla hesaplanır."),
     h("div", { class: "actions" },
       h("a", { class: "btn primary", href: shareLink(legs, total, totalProb), target: "_blank", rel: "noopener" }, "WhatsApp'ta paylaş"),
       h("button", { type: "button", class: "btn primary", "aria-expanded": state.playing,
@@ -617,24 +746,30 @@ function viewKupon(root) {
 }
 /* "Oynadım": tutar + kupon tipi (otomatik dolar, değiştirilebilir) → geçmişe kayıt. */
 function playForm(legs, render) {
-  const draft = state.playDraft || (state.playDraft = { stake: String(state.stake).replace(".", ","), type: History.detectType(legs) });
+  const draft = state.playDraft || (state.playDraft = { stake: String(state.stake).replace(".", ","), type: History.detectType(legs),
+    missing: legs.filter((l) => !legVerified(l)).map((l) => l.key) }); // form açılırken iddaa oranı olmayanlar
   const stakeVal = () => parseNum(draft.stake);
   const preview = h("div", {});
   const showBudget = () => {
     const v = stakeVal();
     preview.replaceChildren(...[budgetBanner(v > 0 ? v : 0)].filter(Boolean));
   };
-  const fairLegs = legs.filter((l) => l.fair).length;
+  const missingLegs = legs.filter((l) => draft.missing.includes(l.key));
+  const left = legs.filter((l) => !legVerified(l)).length;
   const form = h("form", { class: "play", onsubmit: (ev) => {
     ev.preventDefault();
     const v = stakeVal();
     if (!(v > 0) || !Number.isFinite(v)) { toast("Tutar sıfırdan büyük olmalı"); return; }
-    const c = History.makeCoupon(legs, v, draft.type);
+    const resolved = legs.map((l) => {
+      const ok = legVerified(l);
+      return { ...l, price: legPrice(l), fair: !ok && !!l.fair, verified: ok };
+    });
+    const c = History.makeCoupon(resolved, v, draft.type);
     History.applyResults({ coupons: [c] }, (DATA && DATA.results) || []);
     state.history.coupons.unshift(c);
     if (!saveHistory()) { state.history.coupons.shift(); return; }
     state.kupon = []; state.playing = false; state.playDraft = null; saveKupon();
-    toast("Kupon geçmişe kaydedildi");
+    toast(c.unverified ? "Kupon kaydedildi — oran doğrulanmadı" : "Kupon geçmişe kaydedildi");
     location.hash = `#/gecmis/${encodeURIComponent(c.id)}`;
   } },
     h("h3", {}, "Oynadığın kuponu kaydet"),
@@ -644,7 +779,24 @@ function playForm(legs, render) {
     h("label", { class: "stake" }, h("span", {}, "Kupon tipi"),
       h("select", { "aria-label": "Kupon tipi", onchange: (ev) => { draft.type = ev.target.value; } },
         History.TYPES.map((t) => h("option", { value: t, selected: t === draft.type }, History.TYPE_NAMES[t])))),
-    fairLegs ? h("p", { class: "warn" }, `${fairLegs} seçimde adil oran var; iddaa oranını yazmadıysan kazanç yanlış hesaplanır.`) : null,
+    missingLegs.length ? h("div", { class: "play-missing" },
+      h("h4", {}, "iddaa oranını gir"),
+      missingLegs.map((l) => h("label", { class: "kleg play-leg" },
+        h("span", { class: "leg-text" }, h("span", { class: "leg-pick" }, l.pick), h("span", { class: "leg-meta" }, l.match),
+          legVerified(l) ? h("span", { class: "ok-text small" }, "✓ iddaa oranı girildi")
+            : h("span", { class: "small muted" }, `${l.fair ? "Adil" : "Yurtdışı"} oran ${odds(l.price)}`)),
+        h("input", { type: "text", inputmode: "decimal", autocomplete: "off", placeholder: odds(l.price),
+          value: legVerified(l) ? odds(legPrice(l)) : "", "aria-label": `${l.pick} iddaa oranı`,
+          onchange: (ev) => {
+            const t = ev.target.value.trim();
+            const val = Iddaa.parseOdds(t);
+            if (!t) setIddaa(l.matchId, l.kickoff, l.key, null);
+            else if (val != null) setIddaa(l.matchId, l.kickoff, l.key, val);
+            else { toast("Oran 1'den büyük bir sayı olmalı (1,85 ya da 1.85)"); return; }
+            render();
+          } })))) : null,
+    left ? h("p", { class: "warn" }, `${left} seçimin iddaa oranı girilmedi. Böyle kaydedersen kupon "oran doğrulanmadı" olarak `,
+      "işaretlenir; kazanç yurtdışı ya da adil orana göre hesaplanır.") : null,
     preview,
     h("p", { class: "small muted" }, "Tutar sadece bu cihazda saklanır; siteye ya da başka bir yere gönderilmez."),
     h("div", { class: "actions" },
@@ -654,7 +806,8 @@ function playForm(legs, render) {
   return form;
 }
 function shareLink(legs, total, totalProb) {
-  const lines = ["Kuponum (Maç Analiz)", ...legs.map((l) => `• ${l.pick} — ${l.match} @${odds(l.price)}${l.fair ? " (adil)" : ""}`),
+  const lines = ["Kuponum (Maç Analiz)", ...legs.map((l) => `• ${l.pick} — ${l.match} @${odds(legPrice(l))}`
+    + `${legVerified(l) ? "" : l.fair ? " (adil)" : " (yurtdışı)"}`),
     `Toplam oran: ${odds(total)}  Tutma ihtimali: ${pct(totalProb)}`];
   return `https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`;
 }
@@ -783,12 +936,17 @@ function viewHistory(root) {
       summaryCard("Tüm zamanlar", History.summarize(all))));
     kids.push(h("h2", {}, "Kupon tipine göre"), typeTable(all));
     kids.push(...calibrationBlock(all));
-    kids.push(h("h2", {}, "Kuponlar"), h("div", { class: "hlist" }, all.map((c) => {
+    const unv = all.filter((c) => c.unverified).length;
+    kids.push(h("h2", {}, "Kuponlar"));
+    if (unv) kids.push(h("p", { class: "small muted" }, `${unv} kupon iddaa oranı girilmeden kaydedildi (`,
+      h("span", { class: "pill unv" }, "Oran doğrulanmadı"), "); kazançları gerçek iddaa oranıyla farklı olabilir."));
+    kids.push(h("div", { class: "hlist" }, all.map((c) => {
       const r = History.settle(c);
       const manual = r.status === "pending" && manualNeeded(c);
       return h("a", { class: "hrow", href: `#/gecmis/${encodeURIComponent(c.id)}` },
         h("span", { class: "hrow-main" },
-          h("span", { class: "hrow-top" }, h("span", {}, fmtDateTime(c.playedAt)), h("span", { class: "pill" }, History.TYPE_NAMES[c.type])),
+          h("span", { class: "hrow-top" }, h("span", {}, fmtDateTime(c.playedAt)), h("span", { class: "pill" }, History.TYPE_NAMES[c.type]),
+            c.unverified ? h("span", { class: "pill unv" }, "Oran doğrulanmadı") : null),
           h("span", { class: "leg-meta" }, `${c.legs.length} seçim · oran ${odds(c.totalOdds)} · ihtimal ${pct(c.totalProb)}`)),
         h("span", { class: "hrow-num" }, h("b", {}, tl(c.stake)),
           manual ? h("span", { class: "st st-manual" }, "Elle sonuçlandır") : statusBadge(r.status),
@@ -823,13 +981,16 @@ function viewHistoryDetail(root, id) {
     h("h1", {}, "Oynanan kupon"),
     h("div", { class: "card" },
       h("div", { class: "card-head" }, h("h3", {}, fmtDateTime(c.playedAt)), statusBadge(r.status)),
+      c.unverified ? h("p", { class: "odds-warn" }, h("b", {}, "Oran doğrulanmadı: "),
+        "bazı seçimlerin iddaa oranı girilmeden kaydedildi; oran ve kazanç yurtdışı ya da adil orana göre.") : null,
       h("label", { class: "stake" }, h("span", {}, "Kupon tipi"),
         h("select", { "aria-label": "Kupon tipi", onchange: (ev) => { c.type = ev.target.value; touch(); } },
           History.TYPES.map((t) => h("option", { value: t, selected: t === c.type }, History.TYPE_NAMES[t])))),
       c.legs.map((l) => h("div", { class: "hleg" },
         h("div", { class: "leg-text" }, h("span", { class: "leg-pick" }, l.pick),
           h("span", { class: "leg-meta" }, `${fmtDateTime(l.kickoff)}  ${l.match}`),
-          h("span", { class: "prob" }, `Oran ${odds(l.price)}${l.fair ? " (adil)" : ""} · olasılık ${pct(l.prob)}`),
+          h("span", { class: "prob" }, `Oran ${odds(l.price)}${l.fair ? " (adil)" : ""}${l.verified === false ? " (doğrulanmadı)" : ""}`,
+            ` · olasılık ${pct(l.prob)}`),
           h("span", { class: History.needsManual(l) ? "warn" : "small muted" }, legStatusText(l))),
         h("div", { class: "seg small-seg", role: "group", "aria-label": `${l.pick} sonucu` },
           choice(l, null, "Otomatik"), choice(l, "won", "Tuttu"), choice(l, "lost", "Yattı"), choice(l, "void", "İade")))),
@@ -1152,6 +1313,7 @@ async function init() {
     for (const d of DATA[sport] || []) for (const m of d.matches) byId.set(m.id, { match: m, sport });
   }
   state.day = firstDay();
+  migrateKuponOdds(); // §29
   applyResults(); // §27 biten maçların skorları oynanan kuponlara
   updateHeader();
   window.addEventListener("hashchange", route);
