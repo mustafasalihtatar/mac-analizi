@@ -1,11 +1,13 @@
 /* Maç Analiz — arkadaş sitesi. Veri: data.json (yerel uygulamadan yayınlanır).
-   Tüm metinler textContent ile yazılır; kupon bu cihazın tarayıcısında saklanır. */
+   Tüm metinler textContent ile yazılır; kupon ve kupon geçmişi (tutarlar dahil) sadece bu cihazın tarayıcısında
+   saklanır, hiçbir yere gönderilmez. Geçmiş hesapları history.js'te (History). */
 "use strict";
 
 const TZ = "Europe/Istanbul";
 const STORE = "macanaliz.kupon.v1";
+const HSTORE = "macanaliz.gecmis.v1"; // §27 oynanan kuponlar + aylık bütçe
 const KINDS = [
-  ["safe", "Garanti", "Tutma olasılığı yüksek, oranı düşük."],
+  ["safe", History.TYPE_NAMES.safe, "Tutma olasılığı görece yüksek, oranı düşük. Hiçbir kupon garanti değildir."],
   ["risky", "Riskli", "Risk almayan viski içemez."],
   ["slip", "Market fişi", "Çok maçlı, tamamen keyif."],
 ];
@@ -14,7 +16,9 @@ const GROUPS = {
 };
 
 let DATA = null;
-const state = { sport: "football", day: 0, kupon: loadKupon(), stake: 10 };
+const state = { sport: "football", day: 0, kupon: loadKupon(), stake: 10, playing: false, histMsg: null,
+  historyError: null };
+state.history = loadHistory();
 const byId = new Map(); // maç id → {match, sport}
 
 /* ---------- yardımcılar ---------- */
@@ -140,35 +144,69 @@ function saveKupon() {
   b.hidden = n === 0;
 }
 const inKupon = (key) => state.kupon.some((l) => l.key === key);
-function legFrom(m, o) {
+function legFrom(m, o, src) {
   const fair = o.price == null; // oranı çekilmeyen lig: adil oranla girer, kullanıcı iddaa oranını yazar
   return { key: o.key, matchId: m.id, pick: o.pick, match: matchLabel(m), competition: m.competition,
-    kickoff: m.kickoff, price: fair ? o.fair : o.price, prob: o.prob, fair };
+    kickoff: m.kickoff, price: fair ? o.fair : o.price, prob: o.prob, fair, src }; // src: safe|risky|slip|own
 }
 function toggleOption(m, o) {
   if (inKupon(o.key)) {
     state.kupon = state.kupon.filter((l) => l.key !== o.key);
     toast("Kupondan çıkarıldı");
   } else {
-    state.kupon.push(legFrom(m, o));
+    state.kupon.push(legFrom(m, o, "own"));
     toast(started(m) ? "Kupona eklendi — uyarı: maç başladı"
       : o.price == null ? "Adil oranla eklendi — iddaa oranını Kuponum'da gir" : "Kupona eklendi");
   }
   saveKupon();
 }
-function addCoupon(c) {
+function addCoupon(c, kind) {
   let added = 0, late = 0;
   for (const leg of c.legs) {
     const ref = byId.get(leg.match);
     const o = ref && ref.match.options.find((x) => x.key === leg.key);
     if (o && !inKupon(o.key)) {
-      state.kupon.push(legFrom(ref.match, o)); added++;
+      state.kupon.push(legFrom(ref.match, o, kind)); added++;
       if (started(ref.match)) late++;
     }
   }
   saveKupon();
   const warn = late ? ` — uyarı: ${late} maç başladı` : "";
   toast(added ? `${added} seçim kupona eklendi${warn}` : "Bu seçimler zaten kuponda");
+}
+
+/* ---------- kupon geçmişi (localStorage, §27) ---------- */
+function loadHistory() {
+  let raw = null;
+  try { raw = localStorage.getItem(HSTORE); } catch { state.historyError = "Tarayıcı kayıt alanına erişilemiyor; geçmiş kaydedilemez."; }
+  if (raw == null) return History.emptyStore();
+  const r = History.parseStore(raw);
+  if (r.ok) return r.store;
+  // Bozuk kayıt silinmez: ayrı anahtara kopyalanır, kullanıcı yedekten yükleyebilir.
+  try { localStorage.setItem(`${HSTORE}.bozuk`, raw); } catch { /* yer yok vb. */ }
+  state.historyError = `Kayıtlı geçmiş okunamadı (${r.error}). Eski veri "${HSTORE}.bozuk" anahtarında saklandı; yedeğin varsa yükle.`;
+  return History.emptyStore();
+}
+function saveHistory() {
+  try { localStorage.setItem(HSTORE, History.serialize(state.history)); return true; } catch {
+    toast("Geçmiş kaydedilemedi (tarayıcı kayıt alanı dolu ya da kapalı)");
+    return false;
+  }
+}
+function applyResults() {
+  try {
+    if (DATA && History.applyResults(state.history, DATA.results || [])) saveHistory();
+  } catch { /* sonuç uygulanamazsa geçmiş olduğu gibi kalır */ }
+}
+const STATUS = { won: ["Tuttu", "st-won"], lost: ["Yattı", "st-lost"], void: ["İade", "st-void"], pending: ["Bekliyor", "st-pend"] };
+const RESULT_NAMES = { won: "Tuttu", lost: "Yattı", void: "İade" };
+function budgetBanner(extra) {
+  const b = History.budgetState(state.history, new Date(), extra);
+  if (!b || b.level === "ok") return null;
+  const used = `Bu ay ${tl(b.spent)} yatırdın, aylık bütçen ${tl(b.budget)} (%${Math.round(b.ratio * 100)}).`;
+  return h("div", { class: b.level === "over" ? "budget-warn over" : "budget-warn", role: "alert" },
+    h("b", {}, b.level === "over" ? "Aylık bütçeni aştın. " : "Aylık bütçenin %80'ine geldin. "), used,
+    b.level === "over" ? ` ${tl(-b.left)} fazla.` : ` Kalan ${tl(b.left)}.`);
 }
 
 /* ---------- ortak parçalar ---------- */
@@ -255,7 +293,7 @@ function couponCard(day, kind, title, desc) {
     h("div", { class: "total" },
       h("div", {}, h("span", { class: "small muted" }, "Toplam oran"), h("span", { class: "big" }, odds(c.total_odds))),
       h("div", { class: "r" }, h("span", { class: "small muted" }, "Tutma ihtimali"), h("span", { class: "mid" }, pct(c.total_prob)))),
-    h("button", { type: "button", class: "btn block", onclick: () => addCoupon(c) }, "Kupona ekle"));
+    h("button", { type: "button", class: "btn block", onclick: () => addCoupon(c, kind) }, "Kupona ekle"));
 }
 
 /* ---------- görünüm: maçlar ---------- */
@@ -464,7 +502,7 @@ function infoBlock(m) {
 function viewKupon(root) {
   const render = () => viewKupon(root);
   const legs = state.kupon;
-  const kids = [h("h1", {}, "Kuponum")];
+  const kids = [h("h1", {}, "Kuponum"), budgetBanner()].filter(Boolean);
   if (!legs.length) {
     kids.push(h("p", { class: "empty" }, "Kuponun boş. Kuponlar ya da Maçlar bölümünden seçim ekle."));
     root.replaceChildren(...kids, note());
@@ -508,8 +546,49 @@ function viewKupon(root) {
     h("p", { class: "small muted" }, "Oranları iddaa'da gördüğün değerlerle değiştirebilirsin. Tutma ihtimali maçların bağımsız olduğu varsayımıyla hesaplanır."),
     h("div", { class: "actions" },
       h("a", { class: "btn primary", href: shareLink(legs, total, totalProb), target: "_blank", rel: "noopener" }, "WhatsApp'ta paylaş"),
-      h("button", { type: "button", class: "btn", onclick: () => { state.kupon = []; saveKupon(); render(); } }, "Kuponu temizle")));
+      h("button", { type: "button", class: "btn primary", "aria-expanded": state.playing,
+        onclick: () => { state.playing = !state.playing; state.playDraft = null; render(); } }, "Oynadım"),
+      h("button", { type: "button", class: "btn", onclick: () => { state.kupon = []; state.playing = false; saveKupon(); render(); } }, "Kuponu temizle")),
+    state.playing ? playForm(legs, render) : null);
   root.replaceChildren(...kids, card, note());
+}
+/* "Oynadım": tutar + kupon tipi (otomatik dolar, değiştirilebilir) → geçmişe kayıt. */
+function playForm(legs, render) {
+  const draft = state.playDraft || (state.playDraft = { stake: String(state.stake).replace(".", ","), type: History.detectType(legs) });
+  const stakeVal = () => parseNum(draft.stake);
+  const preview = h("div", {});
+  const showBudget = () => {
+    const v = stakeVal();
+    preview.replaceChildren(...[budgetBanner(v > 0 ? v : 0)].filter(Boolean));
+  };
+  const fairLegs = legs.filter((l) => l.fair).length;
+  const form = h("form", { class: "play", onsubmit: (ev) => {
+    ev.preventDefault();
+    const v = stakeVal();
+    if (!(v > 0) || !Number.isFinite(v)) { toast("Tutar sıfırdan büyük olmalı"); return; }
+    const c = History.makeCoupon(legs, v, draft.type);
+    History.applyResults({ coupons: [c] }, (DATA && DATA.results) || []);
+    state.history.coupons.unshift(c);
+    if (!saveHistory()) { state.history.coupons.shift(); return; }
+    state.kupon = []; state.playing = false; state.playDraft = null; saveKupon();
+    toast("Kupon geçmişe kaydedildi");
+    location.hash = `#/gecmis/${encodeURIComponent(c.id)}`;
+  } },
+    h("h3", {}, "Oynadığın kuponu kaydet"),
+    h("label", { class: "stake" }, h("span", {}, "Yatırılan tutar (TL)"),
+      h("input", { type: "text", inputmode: "decimal", autocomplete: "off", value: draft.stake, required: true,
+        "aria-label": "Yatırılan tutar (TL)", oninput: (ev) => { draft.stake = ev.target.value; showBudget(); } })),
+    h("label", { class: "stake" }, h("span", {}, "Kupon tipi"),
+      h("select", { "aria-label": "Kupon tipi", onchange: (ev) => { draft.type = ev.target.value; } },
+        History.TYPES.map((t) => h("option", { value: t, selected: t === draft.type }, History.TYPE_NAMES[t])))),
+    fairLegs ? h("p", { class: "warn" }, `${fairLegs} seçimde adil oran var; iddaa oranını yazmadıysan kazanç yanlış hesaplanır.`) : null,
+    preview,
+    h("p", { class: "small muted" }, "Tutar sadece bu cihazda saklanır; siteye ya da başka bir yere gönderilmez."),
+    h("div", { class: "actions" },
+      h("button", { type: "submit", class: "btn primary" }, "Kaydet"),
+      h("button", { type: "button", class: "btn", onclick: () => { state.playing = false; state.playDraft = null; render(); } }, "Vazgeç")));
+  showBudget();
+  return form;
 }
 function shareLink(legs, total, totalProb) {
   const lines = ["Kuponum (Maç Analiz)", ...legs.map((l) => `• ${l.pick} — ${l.match} @${odds(l.price)}${l.fair ? " (adil)" : ""}`),
@@ -517,6 +596,197 @@ function shareLink(legs, total, totalProb) {
   return `https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`;
 }
 
+/* ---------- görünüm: geçmiş (§27) ---------- */
+const statusBadge = (st) => h("span", { class: `st ${STATUS[st][1]}` }, STATUS[st][0]);
+const rate = (x) => (x == null ? "–" : `%${Math.round(x * 100)}`);
+const netText = (x) => h("b", { class: x > 0 ? "pos" : x < 0 ? "neg" : null }, `${x > 0 ? "+" : ""}${tl(x)}`);
+const manualNeeded = (c) => c.legs.some((l) => History.needsManual(l)
+  || (History.legResult(l) === null && Date.now() - new Date(l.kickoff).getTime() > 7 * 86400 * 1000));
+function summaryCard(title, s) {
+  return h("div", { class: "card" },
+    h("div", { class: "card-head" }, h("h3", {}, title), h("span", { class: "pill" }, `${s.count} kupon`)),
+    h("div", { class: "stats hstats" },
+      h("div", {}, h("span", { class: "small muted" }, "Yatırılan"), h("b", {}, tl(s.staked))),
+      h("div", {}, h("span", { class: "small muted" }, "Dönen"), h("b", {}, tl(s.returned))),
+      h("div", {}, h("span", { class: "small muted" }, "Net"), netText(s.net)),
+      h("div", {}, h("span", { class: "small muted" }, "Tutan"),
+        h("b", {}, rate(s.hitRate)))),
+    h("p", { class: "small muted" }, `${s.won} tuttu, ${s.lost} yattı${s.void ? `, ${s.void} iade` : ""}`,
+      s.pending ? ` · ${s.pending} kupon bekliyor (${tl(s.pendingStaked)}; net sonuca katılmaz)` : ""));
+}
+function typeTable(coupons) {
+  const rows = History.byType(coupons).filter((r) => r.count);
+  return h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "Kupon tipi"), h("th", { class: "num" }, "Sayı"),
+      h("th", { class: "num" }, "Yatırılan"), h("th", { class: "num" }, "Net"), h("th", { class: "num" }, "Tutan"))),
+    h("tbody", {}, rows.map((r) => h("tr", {}, h("td", {}, r.name), h("td", { class: "num" }, r.count),
+      h("td", { class: "num" }, tl(r.staked)), h("td", { class: "num" }, netText(r.net)),
+      h("td", { class: "num" }, r.hitRate == null ? "–" : `${rate(r.hitRate)} (${r.won}/${r.won + r.lost})`))))));
+}
+function calibrationBlock(coupons) {
+  const c = History.calibration(coupons);
+  const out = [h("h2", {}, "Tahmin ve gerçek")];
+  if (!c.n) {
+    out.push(h("p", { class: "empty" }, "Sonuçlanan kupon oldukça modelin verdiği tutma ihtimali ile gerçekleşen burada karşılaştırılır."));
+    return out;
+  }
+  out.push(h("p", {}, `Sonuçlanan ${c.n} kuponda modelin ortalama tutma ihtimali `, h("b", {}, rate(c.expectedRate)),
+      `, gerçekleşen `, h("b", {}, rate(c.actualRate)), `. Beklenen tutan kupon ${c.expectedWins.toFixed(1)}, tutan ${c.actualWins}.`),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "Model ihtimali"), h("th", { class: "num" }, "Kupon"),
+        h("th", { class: "num" }, "Tahmin"), h("th", { class: "num" }, "Gerçek"))),
+      h("tbody", {}, c.bins.map((b) => h("tr", {}, h("td", {}, `%${Math.round(b.lo * 100)}–${Math.round(b.hi * 100)}`),
+        h("td", { class: "num" }, b.n), h("td", { class: "num" }, rate(b.pred)), h("td", { class: "num" }, rate(b.obs))))))),
+    h("p", { class: "small muted" }, c.n < 30
+      ? `Sadece ${c.n} kupon var; bu kadar az kuponda fark büyük ölçüde şanstır.`
+      : "Elle girilen iddaa oranları değil, kuponu oynadığın andaki model ihtimali karşılaştırılır. İade seçimler sayılmaz."));
+  return out;
+}
+function budgetCard(render) {
+  const b = History.budgetState(state.history, new Date());
+  let val = state.history.budget ? String(state.history.budget).replace(".", ",") : "";
+  return h("div", { class: "card" },
+    h("h3", {}, "Aylık bütçe"),
+    h("p", { class: "small muted" }, b ? `Bu ay ${tl(b.spent)} / ${tl(b.budget)} (%${Math.round(b.ratio * 100)}). `
+      + "%80'e gelince ve aşınca Kuponum'da uyarı çıkar." : "İsteğe bağlı. Girersen %80'e gelince ve aşınca Kuponum'da uyarı çıkar."),
+    b ? h("div", { class: "meter", role: "img", "aria-label": `Bütçenin %${Math.round(b.ratio * 100)}'i kullanıldı` },
+      h("span", { class: b.level === "over" ? "over" : b.level === "near" ? "near" : null,
+        style: `width:${Math.min(100, Math.round(b.ratio * 100))}%` })) : null,
+    h("form", { class: "stake", onsubmit: (ev) => {
+      ev.preventDefault();
+      const v = parseNum(val);
+      if (!(v > 0) || !Number.isFinite(v)) { toast("Bütçe sıfırdan büyük olmalı"); return; }
+      state.history.budget = Math.round(v * 100) / 100;
+      if (saveHistory()) toast("Bütçe kaydedildi");
+      render();
+    } },
+      h("input", { type: "text", inputmode: "decimal", autocomplete: "off", value: val, placeholder: "TL", "aria-label": "Aylık bütçe (TL)",
+        oninput: (ev) => { val = ev.target.value; } }),
+      h("button", { type: "submit", class: "btn" }, "Kaydet"),
+      state.history.budget ? h("button", { type: "button", class: "btn", onclick: () => {
+        state.history.budget = null; saveHistory(); render();
+      } }, "Kaldır") : null));
+}
+function backupCard(render) {
+  const file = h("input", { type: "file", accept: ".json,application/json", hidden: true, onchange: async (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    if (!f) return;
+    if (f.size > 5 * 1024 * 1024) { state.histMsg = { bad: true, text: "Dosya çok büyük; Maç Analiz yedeği değil." }; render(); return; }
+    let text = "";
+    try { text = await f.text(); } catch { state.histMsg = { bad: true, text: "Dosya okunamadı." }; render(); return; }
+    const r = History.parseStore(text);
+    if (!r.ok) { state.histMsg = { bad: true, text: `${r.error} Mevcut geçmişin değişmedi.` }; render(); return; }
+    const before = state.history;
+    const m = History.mergeStores(state.history, r.store);
+    state.history = m.store;
+    if (!saveHistory()) { state.history = before; state.histMsg = { bad: true, text: "Kaydedilemedi; mevcut geçmişin değişmedi." }; render(); return; }
+    applyResults();
+    state.historyError = null;
+    state.histMsg = { bad: false, text: `Yedek yüklendi: ${m.added} yeni kupon${m.updated ? `, ${m.updated} güncellendi` : ""}. Mevcut kuponların silinmedi.` };
+    render();
+  } });
+  const download = () => {
+    try {
+      const blob = new Blob([History.serialize(state.history)], { type: "application/json" });
+      const a = h("a", { href: URL.createObjectURL(blob), download: `macanaliz-gecmis-${new Date().toISOString().slice(0, 10)}.json` });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch { toast("Yedek dosyası oluşturulamadı"); }
+  };
+  return h("div", { class: "card" },
+    h("h3", {}, "Yedek"),
+    h("p", { class: "small muted" }, "Geçmiş sadece bu tarayıcıda durur; tarayıcı verisi silinirse kaybolur. Ara sıra yedek al. ",
+      "Yedekten yükleme mevcut kuponları silmez, birleştirir."),
+    state.histMsg ? h("p", { class: state.histMsg.bad ? "odds-warn" : "ok-msg", role: "status" }, state.histMsg.text) : null,
+    h("div", { class: "actions" },
+      h("button", { type: "button", class: "btn", disabled: !state.history.coupons.length, onclick: download }, "Yedekle"),
+      h("button", { type: "button", class: "btn", onclick: () => file.click() }, "Yedekten yükle"), file));
+}
+function viewHistory(root) {
+  const render = () => viewHistory(root);
+  applyResults();
+  const all = [...state.history.coupons].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt));
+  const mk = History.monthKey(new Date().toISOString());
+  const month = all.filter((c) => History.monthKey(c.playedAt) === mk);
+  const monthName = new Intl.DateTimeFormat("tr-TR", { timeZone: TZ, month: "long" }).format(new Date());
+  const kids = [h("h1", {}, "Geçmiş")];
+  if (state.historyError) kids.push(h("p", { class: "odds-warn", role: "alert" }, state.historyError));
+  kids.push(budgetBanner() || "");
+  if (!all.length) {
+    kids.push(h("p", { class: "empty" }, "Henüz oynadığın kupon yok. Kuponum'da kuponu kurup \"Oynadım\"a bas."));
+  } else {
+    kids.push(h("div", { class: "grid" }, summaryCard(`Bu ay (${monthName})`, History.summarize(month)),
+      summaryCard("Tüm zamanlar", History.summarize(all))));
+    kids.push(h("h2", {}, "Kupon tipine göre"), typeTable(all));
+    kids.push(...calibrationBlock(all));
+    kids.push(h("h2", {}, "Kuponlar"), h("div", { class: "hlist" }, all.map((c) => {
+      const r = History.settle(c);
+      const manual = r.status === "pending" && manualNeeded(c);
+      return h("a", { class: "hrow", href: `#/gecmis/${encodeURIComponent(c.id)}` },
+        h("span", { class: "hrow-main" },
+          h("span", { class: "hrow-top" }, h("span", {}, fmtDateTime(c.playedAt)), h("span", { class: "pill" }, History.TYPE_NAMES[c.type])),
+          h("span", { class: "leg-meta" }, `${c.legs.length} seçim · oran ${odds(c.totalOdds)} · ihtimal ${pct(c.totalProb)}`)),
+        h("span", { class: "hrow-num" }, h("b", {}, tl(c.stake)),
+          manual ? h("span", { class: "st st-manual" }, "Elle sonuçlandır") : statusBadge(r.status),
+          r.status === "won" || r.status === "void" ? h("small", { class: "muted" }, tl(r.payout)) : null));
+    })));
+  }
+  kids.push(h("h2", {}, "Ayarlar"), h("div", { class: "grid" }, budgetCard(render), backupCard(render)));
+  kids.push(h("p", { class: "note" }, "Sonuçlar maç bittikten sonraki sabah güncellemesiyle gelir (son 7 gün). Ertelenen, iptal edilen ",
+    "ya da uzatmaya giden maçlar ve LFA'da olmayan maçlar (NBA, Konferans Ligi, milli maçlar) elle sonuçlandırılır."));
+  root.replaceChildren(...kids.filter(Boolean));
+}
+function legStatusText(l) {
+  const auto = l.status === "finished" ? History.legFromScore(l.key, l.score) : null;
+  if (l.manual) return `Elle: ${RESULT_NAMES[l.manual]}${auto ? ` (otomatik: ${RESULT_NAMES[auto]}, skor ${l.score})` : ""}`;
+  if (l.status === "finished") return `Skor ${l.score} → ${auto ? RESULT_NAMES[auto] : "sonuçlandırılamadı"}`;
+  if (l.status === "postponed") return "Ertelendi — iddaa kuralına göre elle sonuçlandır";
+  if (l.status === "cancelled") return "İptal — iddaa kuralına göre elle sonuçlandır";
+  if (l.status === "aet") return `Uzatmaya gitti (${l.score}) — 90 dakika sonucuna göre elle sonuçlandır`;
+  return new Date(l.kickoff) <= new Date() ? "Sonuç bekleniyor" : "Oynanmadı";
+}
+function viewHistoryDetail(root, id) {
+  const render = () => viewHistoryDetail(root, id);
+  applyResults();
+  const c = state.history.coupons.find((x) => x.id === id);
+  const back = h("a", { class: "back", href: "#/gecmis" }, "‹ Geçmiş");
+  if (!c) { root.replaceChildren(back, h("p", { class: "empty" }, "Kupon bulunamadı.")); return; }
+  const r = History.settle(c);
+  const touch = () => { c.updatedAt = new Date().toISOString(); saveHistory(); render(); };
+  const choice = (l, val, label) => h("button", { type: "button", "aria-pressed": (l.manual || null) === val,
+    onclick: () => { l.manual = val; touch(); } }, label);
+  root.replaceChildren(back,
+    h("h1", {}, "Oynanan kupon"),
+    h("div", { class: "card" },
+      h("div", { class: "card-head" }, h("h3", {}, fmtDateTime(c.playedAt)), statusBadge(r.status)),
+      h("label", { class: "stake" }, h("span", {}, "Kupon tipi"),
+        h("select", { "aria-label": "Kupon tipi", onchange: (ev) => { c.type = ev.target.value; touch(); } },
+          History.TYPES.map((t) => h("option", { value: t, selected: t === c.type }, History.TYPE_NAMES[t])))),
+      c.legs.map((l) => h("div", { class: "hleg" },
+        h("div", { class: "leg-text" }, h("span", { class: "leg-pick" }, l.pick),
+          h("span", { class: "leg-meta" }, `${fmtDateTime(l.kickoff)}  ${l.match}`),
+          h("span", { class: "prob" }, `Oran ${odds(l.price)}${l.fair ? " (adil)" : ""} · olasılık ${pct(l.prob)}`),
+          h("span", { class: History.needsManual(l) ? "warn" : "small muted" }, legStatusText(l))),
+        h("div", { class: "seg small-seg", role: "group", "aria-label": `${l.pick} sonucu` },
+          choice(l, null, "Otomatik"), choice(l, "won", "Tuttu"), choice(l, "lost", "Yattı"), choice(l, "void", "İade")))),
+      h("div", { class: "total" },
+        h("div", {}, h("span", { class: "small muted" }, "Toplam oran"), h("span", { class: "big" }, odds(c.totalOdds))),
+        h("div", { class: "r" }, h("span", { class: "small muted" }, "Tutma ihtimali"), h("span", { class: "mid" }, pct(c.totalProb)))),
+      h("div", { class: "stats hstats" },
+        h("div", {}, h("span", { class: "small muted" }, "Yatırılan"), h("b", {}, tl(c.stake))),
+        h("div", {}, h("span", { class: "small muted" }, "Dönen"), h("b", {}, r.payout == null ? "–" : tl(r.payout))),
+        h("div", {}, h("span", { class: "small muted" }, "Net"), r.payout == null ? h("b", {}, "–") : netText(r.payout - c.stake))),
+      r.status === "won" && r.odds !== c.totalOdds ? h("p", { class: "small muted" }, `İade seçimler oran 1 sayıldı: geçerli oran ${odds(r.odds)}.`) : null,
+      h("p", { class: "small muted" }, "\"Otomatik\" maç skoruna göre sonuçlandırır; elle seçtiğin sonuç her zaman önce gelir. ",
+        "Bir seçim yatınca kupon yatar; İade seçilen maçın oranı 1 sayılır."),
+      h("div", { class: "actions" },
+        h("button", { type: "button", class: "btn danger", onclick: () => {
+          if (!confirm("Bu kupon geçmişten silinsin mi? Geri alınamaz (yedeğin yoksa).")) return;
+          state.history.coupons = state.history.coupons.filter((x) => x.id !== c.id);
+          if (saveHistory()) { toast("Kupon silindi"); location.hash = "#/gecmis"; }
+        } }, "Kuponu sil"))));
+}
 /* ---------- görünüm: performans ---------- */
 const SVG_NS = "http://www.w3.org/2000/svg";
 function svg(tag, attrs, ...kids) {
@@ -689,7 +959,7 @@ function route() {
   const root = document.getElementById("view");
   const hash = location.hash || "#/";
   const tab = hash.startsWith("#/kupon") ? "kupon" : hash.startsWith("#/mac") ? "maclar"
-    : hash.startsWith("#/performans") ? "performans" : "kuponlar";
+    : hash.startsWith("#/performans") ? "performans" : hash.startsWith("#/gecmis") ? "gecmis" : "kuponlar";
   document.querySelectorAll(".tabs a").forEach((a) => {
     if (a.dataset.tab === tab) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -707,6 +977,12 @@ function route() {
   else if (hash.startsWith("#/maclar")) viewMatches(root);
   else if (hash.startsWith("#/kupon")) viewKupon(root);
   else if (hash.startsWith("#/performans")) viewPerformance(root);
+  else if (hash.startsWith("#/gecmis/")) {
+    let id = "";
+    try { id = decodeURIComponent(hash.slice(9)); } catch { /* bozuk adres */ }
+    viewHistoryDetail(root, id);
+  }
+  else if (hash.startsWith("#/gecmis")) viewHistory(root);
   else viewCoupons(root);
   const nb = noticesBar();
   if (nb) root.prepend(nb);
@@ -759,6 +1035,7 @@ async function init() {
     for (const d of DATA[sport] || []) for (const m of d.matches) byId.set(m.id, { match: m, sport });
   }
   state.day = firstDay();
+  applyResults(); // §27 biten maçların skorları oynanan kuponlara
   updateHeader();
   window.addEventListener("hashchange", route);
   route();
