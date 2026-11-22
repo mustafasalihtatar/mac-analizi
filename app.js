@@ -70,7 +70,7 @@ function bestEdge(m) { // modelin piyasadan en çok yüksek gördüğü, kupona 
   return best;
 }
 
-/* Takım arması (futbol): yoksa ya da yüklenemezse baş harfler. */
+/* Takım arması (futbol, diğer ligler, NBA): yoksa ya da yüklenemezse baş harfler. */
 const NOISE = /^(fc|sk|cf|ac|as|sc|afc|ssc|fk|sv|tsg|vfb|vfl|rc|bv|\d+)$/i;
 function initials(name) {
   const w = String(name).split(/[\s.\-/]+/).filter((x) => x && !NOISE.test(x));
@@ -78,7 +78,7 @@ function initials(name) {
   return s.toUpperCase(); // "Milan" → "MI" (tr-TR kuralı "Mİ" yapardı)
 }
 function crest(m, side, size) {
-  if (m.sport !== "football" && !isMinor(m)) return null;
+  if (m.sport !== "football" && m.sport !== "basketball" && !isMinor(m)) return null;
   const cls = `crest${size ? ` ${size}` : ""}`;
   const fallback = () => h("span", { class: `${cls} ini`, "aria-hidden": "true" }, initials(m[side]));
   const src = m.logos && m.logos[side];
@@ -88,17 +88,22 @@ function crest(m, side, size) {
   return img;
 }
 
-/* 1X2 olasılık çubuğu: ev / beraberlik / deplasman. */
+/* MS olasılık çubuğu: ev / beraberlik / deplasman (NBA: ev / deplasman, beraberlik yok). */
 const OUT3 = ["home", "draw", "away"];
+const outsOf = (m) => (m.sport === "basketball" ? ["home", "away"] : OUT3);
 function probs3(m, field) {
   const get = (k) => { const o = m.options.find((x) => x.market === "h2h" && x.outcome === k); return o ? o[field] : null; };
-  const v = OUT3.map(get);
+  const v = outsOf(m).map(get);
   return v.every((x) => x != null) ? v : null;
 }
 function pbar(vals, thin) {
+  const outs = vals.length === 2 ? ["home", "away"] : OUT3;
   return h("div", { class: thin ? "pbar thin" : "pbar", "aria-hidden": "true" }, vals.map((p, i) =>
-    h("span", { class: `seg-${OUT3[i]}`, style: `flex-grow:${Math.max(p, 0.001)}` }, !thin && p >= 0.12 ? pct(p) : null)));
+    h("span", { class: `seg-${outs[i]}`, style: `flex-grow:${Math.max(p, 0.001)}` }, !thin && p >= 0.12 ? pct(p) : null)));
 }
+/* Sitede gösterilen MS olasılığı harman mı (futbol §26-5, NBA §28 ayrı karar). */
+const nbaBlend = () => (DATA.performance_nba && DATA.performance_nba.blend) || null;
+const blendOn = (m) => (m.sport === "basketball" ? !!(nbaBlend() && nbaBlend().use_on_site) : !!(DATA.blend && DATA.blend.use_on_site));
 
 const STALE_MS = 12 * 3600 * 1000;
 const PROGRAM_STALE_MS = 36 * 3600 * 1000; // diğer liglerin maç programı günde bir yenilenir
@@ -341,8 +346,7 @@ function viewMatch(root, id) {
   const render = () => viewMatch(root, id);
   const kids = [
     h("a", { class: "back", href: "#/maclar" }, "‹ Maçlar"),
-    m.sport !== "basketball" ? h("div", { class: "vs" }, crest(m, "home", "lg"), h("span", { class: "vs-x" }, "–"),
-      crest(m, "away", "lg")) : null,
+    h("div", { class: "vs" }, crest(m, "home", "lg"), h("span", { class: "vs-x" }, "–"), crest(m, "away", "lg")),
     h("h1", {}, matchLabel(m)),
     h("p", { class: "muted small" }, `${m.competition}  ${fmtDateTime(m.kickoff)}`, started(m) ? "  (başladı)" : ""),
   ];
@@ -352,23 +356,29 @@ function viewMatch(root, id) {
   kids.push(m.sport !== "basketball"
     ? h("div", { class: "expected" }, h("div", {}, h("span", { class: "small muted" }, `${m.home} beklenen gol`), h("b", {}, e.home.toFixed(2))),
         h("div", {}, h("span", { class: "small muted" }, `${m.away} beklenen gol`), h("b", {}, e.away.toFixed(2))))
-    : h("div", { class: "expected" }, h("div", {}, h("span", { class: "small muted" }, `${m.home} beklenen fark`), h("b", {}, (e.margin > 0 ? "+" : "") + e.margin.toFixed(1))),
-        e.total != null ? h("div", {}, h("span", { class: "small muted" }, "Beklenen toplam"), h("b", {}, e.total.toFixed(1))) : null));
+    : nbaExpected(m));
 
   const minor = isMinor(m);
   const pm = minor ? null : probs3(m, "market_prob"), pmod = probs3(m, minor ? "prob" : "model_prob");
   const pbl = minor ? null : probs3(m, "blend_prob");
   if (pm || pmod) {
-    const names = [m.home, "Beraberlik", m.away];
+    const names = m.sport === "basketball" ? [m.home, m.away] : [m.home, "Beraberlik", m.away];
+    const outs = outsOf(m);
     kids.push(h("div", { class: "pbars" },
       pm ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Piyasa"), pbar(pm)) : null,
       pmod ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Model"), pbar(pmod)) : null,
       pbl ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Harman"), pbar(pbl)) : null,
       h("div", { class: "pbar-legend" }, names.map((n, i) =>
-        h("span", {}, h("i", { class: `dot seg-${OUT3[i]}` }), n)))));
+        h("span", {}, h("i", { class: `dot seg-${outs[i]}` }), n)))));
   }
   if (minor) kids.push(minorNote(), h("p", { class: "small muted" },
     "Seçeneğe dokununca adil oranla kupona eklenir; Kuponum'da iddaa oranını yazabilirsin."));
+  else if (m.sport === "basketball") kids.push(h("p", { class: "small muted" }, "Seçeneğe dokununca kupona eklenir; tekrar dokununca çıkar. ",
+    "Piyasa: oranlardan bahis şirketi payı ayıklanmış olasılık. Model: oranlara bakmadan son 3 sezonun NBA maçlarından ",
+    "kurduğumuz model (hücum/savunma rating'i, pace, ev avantajı, dinlenme ve resmi sakatlık raporundaki eksikler). ",
+    `Model piyasadan ${Math.round(EDGE * 100)}+ puan ayrılınca işaretlenir. `,
+    "NBA'de geçmiş oran olmadığı için model ile piyasa canlıda karşılaştırılıyor; 300 maç dolunca harman denenecek (Performans). ",
+    "Maç sonucu uzatmalar dahildir."));
   else kids.push(h("p", { class: "small muted" }, "Seçeneğe dokununca kupona eklenir; tekrar dokununca çıkar. ",
     "Piyasa: oranlardan bahis şirketi payı ayıklanmış olasılık. Model: oranlara bakmadan geçmiş maçlardan (gol ve xG) ",
     "kurduğumuz model; Süper Lig, 5 büyük lig ve Avrupa kupalarında, diğerlerinde –. ",
@@ -394,7 +404,7 @@ function viewMatch(root, id) {
         title: o.price && !o.addable ? "Çeyrek çizgi: yarım kazanç/iade kuralı nedeniyle kupona eklenemez" : null,
         onclick: () => { toggleOption(m, o); render(); } },
         h("span", { class: "p" }, h("span", {}, o.pick),
-          h("span", { class: "prob" }, DATA.blend && DATA.blend.use_on_site && o.market_prob != null && Math.abs(o.prob - o.market_prob) > 0.0005
+          h("span", { class: "prob" }, blendOn(m) && o.market_prob != null && Math.abs(o.prob - o.market_prob) > 0.0005
             ? `Harman ${pct(o.prob)} adil ${odds(o.fair)} (piyasa ${pct(o.market_prob)})`
             : `Piyasa ${pct(o.market_prob ?? o.prob)} adil ${odds(o.fair)}`),
           h("span", { class: "prob model" }, `Model ${pct(o.model_prob)}`,
@@ -404,6 +414,7 @@ function viewMatch(root, id) {
   }
   kids.push(...statsBlock(m));
   kids.push(...injuryBlock(m));
+  kids.push(...nbaBlock(m));
   if (m.info) kids.push(...infoBlock(m));
   kids.push(note(minor));
   root.replaceChildren(...kids);
@@ -467,6 +478,58 @@ function injuryBlock(m) {
     h("div", { class: "two" }, side(m.home, j.home), side(m.away, j.away)),
     h("p", { class: "small muted" }, "Etki, oyuncunun son 10 maçtaki süresi ve gol+asist payından hesaplanır. ",
       "Bu düzeltme şimdilik sadece ölçülüyor; yukarıdaki olasılıklara dahil değil.")];
+}
+/* §28 NBA: beklenen fark/toplam (piyasa ve model yan yana). */
+const signed = (x) => (x > 0 ? "+" : x < 0 ? "−" : "±") + Math.abs(x).toFixed(1);
+function nbaExpected(m) {
+  const e = m.expected, me = m.model_expected;
+  const cell = (label, mk, md) => h("div", {}, h("span", { class: "small muted" }, label), h("b", {}, mk),
+    md != null ? h("small", { class: "muted" }, ` model ${md}`) : null);
+  return h("div", { class: "expected" },
+    cell(`${m.home} beklenen fark`, signed(e.margin), me ? signed(me.margin) : null),
+    e.total != null || me ? cell("Beklenen toplam", e.total != null ? e.total.toFixed(1) : "–", me ? me.total.toFixed(1) : null) : null);
+}
+/* §28 NBA maç detayı: son 5 maç, rating ve pace, dinlenme, eksikler (türetilmiş özet). */
+function nbaBlock(m) {
+  if (m.sport !== "basketball") return [];
+  const i = m.nba_info;
+  if (!i) return [h("p", { class: "small muted" }, "Kendi model bu maç için kurulamadı (takım verisi yok); olasılıklar piyasadan.")];
+  const form = (rows) => (rows && rows.length ? h("div", {},
+    h("div", { class: "form", "aria-label": "Son 5 maç" }, rows.map((r) => h("span", { class: `res res-${r.result}`, title: `${r.opp} ${r.score}` }, r.result))),
+    h("table", {}, h("tbody", {}, rows.map((r) => h("tr", {}, h("td", {}, fmtDate(r.date)), h("td", {}, r.opp),
+      h("td", { class: "muted" }, r.home ? "iç saha" : "dış saha"), h("td", { class: "num" }, r.score))))))
+    : h("p", { class: "muted small" }, "Bu sezon maç yok."));
+  const out = [h("h2", {}, "Son 5 maç"),
+    h("div", { class: "two" }, h("div", {}, h("h3", {}, m.home), form(i.form.home)), h("div", {}, h("h3", {}, m.away), form(i.form.away)))];
+  const R = i.ratings || {}, H = R.home, A = R.away;
+  if (H || A) {
+    const v = (t, k, rk) => (t ? h("span", {}, t[k].toFixed(1), rk ? h("small", { class: "muted" }, ` (${t[rk]}.)`) : null) : "–");
+    const rows = [["Hücum rating'i", (t) => v(t, "ortg")], ["Savunma rating'i", (t) => v(t, "drtg")],
+      ["Net rating", (t) => (t ? h("span", {}, signed(t.net), h("small", { class: "muted" }, ` (${t.rank_net}.)`)) : "–")],
+      ["Pace", (t) => v(t, "pace", "rank_pace")]];
+    out.push(h("h2", {}, "Rating ve tempo"), h("div", { class: "table-wrap" }, h("table", { class: "stats-table" },
+      h("thead", {}, h("tr", {}, h("th", {}, ""), h("th", { class: "num" }, h("span", { class: "th-team" }, m.home)),
+        h("th", { class: "num" }, h("span", { class: "th-team" }, m.away)))),
+      h("tbody", {}, rows.map(([label, f]) => h("tr", {}, h("td", {}, label), h("td", { class: "num" }, f(H)), h("td", { class: "num" }, f(A))))))),
+      h("p", { class: "small muted" }, "Rating: 100 hücumda atılan (hücum) ve yenen (savunma) sayı, rakip gücüne göre düzeltilmiş, ",
+        "son maçlar daha ağırlıklı. Net = hücum − savunma; parantez içi lig sırası. Pace: 48 dakikadaki hücum sayısı."));
+  }
+  const rest = (t) => (!t || t.days == null ? "Sezonun ilk maçı" : t.b2b ? "Art arda ikinci gece (dün oynadı)"
+    : `${t.days - 1} gün dinlendi`);
+  out.push(h("h2", {}, "Dinlenme"), h("div", { class: "two" },
+    h("div", {}, h("h3", {}, m.home), h("p", { class: i.rest.home && i.rest.home.b2b ? "small warn-text" : "small" }, rest(i.rest.home))),
+    h("div", {}, h("h3", {}, m.away), h("p", { class: i.rest.away && i.rest.away.b2b ? "small warn-text" : "small" }, rest(i.rest.away)))));
+  const j = i.injuries;
+  const STAT = { Out: "Oynamayacak", Doubtful: "Şüpheli (zayıf ihtimal)" };
+  const side = (name, list) => h("div", {}, h("h3", {}, name), list && list.length
+    ? h("ul", { class: "small" }, list.map((x) => h("li", {}, `${x.name} – ${STAT[x.status] || x.status}`)))
+    : h("p", { class: "small muted" }, j.status === "no_report" ? "Rapor alınamadı." : "Bildirilen eksik yok."));
+  out.push(h("h2", {}, "Eksikler (resmi sakatlık raporu)"), h("div", { class: "two" }, side(m.home, j.home), side(m.away, j.away)),
+    h("p", { class: "small muted" }, j.status === "no_report"
+      ? "NBA resmi sakatlık raporu bu maç için henüz yok ya da okunamadı; model eksik düzeltmesi yapmadı."
+      : `Oynamayacak ve şüpheli oyuncular, son 15 maçtaki süre ve +/- katkısına göre takım rating'inden düşüldü. `
+        + `Ev sahibi beklenen farka etkisi: ${signed(j.effect)} sayı. Bu düzeltmenin işe yarayıp yaramadığı Performans'ta ayrı ölçülüyor.`));
+  return out;
 }
 function minorOrModel(m) {
   return isMinor(m) ? "En olası skorlar (kendi model):" : "En olası skorlar (sitede gösterilen olasılıklarla):";
@@ -826,7 +889,7 @@ function viewPerformance(root) {
       "Süper Lig, 5 büyük lig, Şampiyonlar Ligi ve Avrupa Ligi; sonuçlar maçtan sonraki ilk güncellemede eklenir.")];
   if (!p || !p.n) {
     kids.push(h("p", { class: "empty" }, "Canlı ölçüm: henüz sonuçlanmış maç yok. Maçlar bittikçe burada görünecek."),
-      ...blendLiveBlock(), ...backtestBlock(), ...minorBlock(), note());
+      ...blendLiveBlock(), ...backtestBlock(), ...minorBlock(), ...nbaPerfBlock(), note());
     root.replaceChildren(...kids);
     return;
   }
@@ -882,8 +945,61 @@ function viewPerformance(root) {
         `${brier(inj.injury_brier)}. `, inj.proven ? "Düzeltme işe yarıyor."
           : `Kanıt için en az ${inj.min_n} maçta, farkın standart hatasından büyük olması gerekiyor; o zamana kadar olasılıklara katılmaz.`));
   }
-  kids.push(...blendLiveBlock(), ...backtestBlock(), ...minorBlock(), note());
+  kids.push(...blendLiveBlock(), ...backtestBlock(), ...minorBlock(), ...nbaPerfBlock(), note());
   root.replaceChildren(...kids);
+}
+/* §28 NBA: canlı ölçüm (piyasa, model, resmi raporla düzeltilmiş model, harman), 300 maç harman sayacı, geçmiş test. */
+function nbaPerfBlock() {
+  const p = DATA.performance_nba;
+  if (!p) return [];
+  const NAMES = { market: "Piyasa (sitede gösterilen)", model: "Kendi model", model_injury: "Model + resmi sakatlık raporu", blend: "Harman" };
+  const num = (x, d) => (x == null ? "–" : x.toFixed(d));
+  const out = [h("h2", { class: "sport-head" }, "NBA"),
+    h("p", { class: "muted" }, "NBA maç sonucu (uzatmalar dahil) tahminleri; sonuçlar ertesi sabah eklenir. ",
+      "Geçmiş oran olmadığı için piyasa ile model sadece canlıda karşılaştırılabiliyor.")];
+  const bl = p.blend;
+  out.push(h("p", { class: "small" }, bl.decided_at
+    ? `Harman ${fmtDate(bl.decided_at)} tarihinde ${bl.need} maçla karara bağlandı: son 100 maçta Brier harman ${brier(bl.blend_brier)}, `
+      + `piyasa ${brier(bl.market_brier)}, model ${brier(bl.model_brier)}. Sitede ${bl.use_on_site ? "harman" : "piyasa"} gösteriliyor.`
+    : `Harman kararı için: ${bl.n}/${bl.need} maç. Dolunca ilk 200 maçla harman öğrenilecek, son 100 maçta piyasayı geçerse sitede gösterilecek.`));
+  const rows = p.markets.filter((r) => r.n);
+  if (!rows.length) out.push(h("p", { class: "empty" }, "Canlı ölçüm: henüz sonuçlanmış NBA maçı yok."));
+  else {
+    if (p.n < p.min_reliable) out.push(h("p", { class: "warn" }, `Henüz az veri (${p.n} maç): sonuçlar şansa çok bağlı.`));
+    out.push(h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["Tahmin", "Maç", "Brier", "Log loss", "Favori tuttu", "Fark hatası"].map((c, i) => h("th", { class: i ? "num" : null }, c)))),
+      h("tbody", {}, rows.map((r) => h("tr", {}, h("td", {}, NAMES[r.key] || r.key), h("td", { class: "num" }, r.n),
+        h("td", { class: "num" }, h("b", {}, brier(r.brier))), h("td", { class: "num" }, num(r.logloss, 3)),
+        h("td", { class: "num" }, pct(r.accuracy)), h("td", { class: "num" }, num(r.mae_margin, 1))))))),
+      h("p", { class: "small muted" }, "Brier kıyası (her maça %50): 0.250. Fark hatası: ev sahibi sayı farkı tahmininin ortalama mutlak hatası."));
+    const inj = p.injury;
+    if (inj && inj.n) out.push(h("p", { class: "small" }, `Resmi sakatlık raporu düzeltmesi: ${inj.n} maçın ${inj.with_report}'inde rapor vardı; `,
+      `Brier farkı ${inj.diff > 0 ? "+" : ""}${num(inj.diff, 4)}${inj.se != null ? ` ± ${num(inj.se, 4)}` : ""} (eksi = düzeltme işe yarıyor).`));
+    out.push(h("div", { class: "table-wrap" }, h("table", { class: "recent" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Maç"), h("th", { class: "num" }, "Skor"), h("th", { class: "num" }, "Piyasa"), h("th", { class: "num" }, "Model"))),
+      h("tbody", {}, p.recent.map((r) => {
+        const hw = Number(r.score.split("-")[0]) > Number(r.score.split("-")[1]);
+        const cls = (q) => (q == null ? "num" : (q > 0.5) === hw ? "num hit" : "num");
+        return h("tr", {}, h("td", {}, h("span", { class: "rm" }, `${r.home} – ${r.away}`), h("small", { class: "muted" }, fmtDate(r.kickoff))),
+          h("td", { class: "num" }, h("b", {}, r.score)), h("td", { class: cls(r.k_home) }, pct(r.k_home)), h("td", { class: cls(r.i_home) }, pct(r.i_home)));
+      })))), h("p", { class: "small muted" }, "Olasılıklar ev sahibinin kazanması için. Yeşil: favori dediği takım kazandı."));
+  }
+  const b = p.backtest;
+  if (b) {
+    out.push(h("h3", { class: "sub" }, `Geçmiş test (${b.season} sezonu, sadece model)`),
+      h("p", { class: "small muted" }, "Her gün sadece o günden önceki maçlarla yeniden kurulan model, o günün maçlarını tahmin etti. ",
+        "Ayarlar bir önceki sezonda seçildi; test sezonu bir kez kullanıldı."),
+      h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["Model", "Maç", "Brier", "Log loss", "Favori tuttu", "Fark hatası", "Toplam hatası"].map((c, i) => h("th", { class: i ? "num" : null }, c)))),
+        h("tbody", {}, [["Eksik düzeltmesiz", b.plain], ["Eksik düzeltmeli", b.absence]].map(([name, r]) => h("tr", {},
+          h("td", {}, name), h("td", { class: "num" }, r.n.toLocaleString("tr-TR")), h("td", { class: "num" }, h("b", {}, brier(r.brier))),
+          h("td", { class: "num" }, num(r.logloss, 3)), h("td", { class: "num" }, pct(r.accuracy)),
+          h("td", { class: "num" }, num(r.mae_margin, 1)), h("td", { class: "num" }, num(r.mae_total, 1))))))),
+      h("p", { class: "small muted" }, `Kıyas (hep ev sahibi oranı): Brier ${brier(b.baseline_brier)}. `,
+        "Eksik düzeltmeli satırda eksikler maç kaydından (o maçta oynamayan düzenli oyuncular) çıkarıldı; bu, son dakika ",
+        "kararlarını ve dinlendirmeyi de bildiği için biraz iyimserdir. Canlıda resmi rapor kullanılır ve ayrı ölçülür."));
+  }
+  return out;
 }
 function minorBlock() {
   const b = DATA.minor_info && DATA.minor_info.backtest;

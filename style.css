@@ -240,3 +240,7 @@ select { font: inherit; color: var(--light); background: var(--pitch); border: 1
 .btn.danger { border-color: rgba(229, 72, 77, .6); color: #FFB3B5; }
 .ok-msg { color: var(--green); font-size: 14px; margin: 0 0 8px; }
 
+
+/* §28 NBA */
+.warn-text { color: var(--board); }
+h2.sport-head { margin-top: 34px; padding-top: 14px; border-top: 2px solid var(--line); }
