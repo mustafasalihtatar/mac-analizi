@@ -156,6 +156,11 @@ tr.hl td { background: rgba(245, 197, 24, .12); }
 .stake input { max-width: 110px; }
 .stake > span { white-space: nowrap; }
 .warn { color: var(--board); font-size: 13px; margin: 8px 0 0; }
+.odds-warn { background: rgba(229, 72, 77, .14); border: 1px solid rgba(229, 72, 77, .55); color: var(--light);
+  border-radius: 10px; padding: 9px 12px; font-size: 14px; margin: 0 0 10px; }
+.odds-warn b { color: #FFB3B5; }
+.quota { margin: -4px 0 10px; }
+.quota-reset { white-space: nowrap; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
 
 /* performans */

@@ -178,6 +178,29 @@ function sportSwitch(onChange, withMinor) {
   return h("div", { class: "seg", role: "group", "aria-label": "Spor" }, b("football", "Futbol"), b("basketball", "NBA"),
     withMinor && DATA && DATA.minor ? b("minor", "Diğer ligler") : null);
 }
+/* Odds API aylık kota satırı (futbol/NBA sayfalarında). */
+function quotaLine() {
+  const q = DATA && DATA.odds_quota;
+  if (!q || state.sport === "minor") return null;
+  return h("p", { class: "quota small muted" }, `Bu ay kalan: ${q.remaining} kredi, günlük güvenli harcama: ${q.daily_safe}`,
+    h("span", { class: "quota-reset" }, ` · ${fmtDateTime(q.resets_at)}'te yenilenir`));
+}
+/* Son oran çekme başarısızsa (kota sınırı vb.) seçili spor için uyarı bandı. */
+const ODDS_REASON = {
+  budget: "bugünkü güvenli kredi harcaması doldu; yarın yeniden denenecek",
+  low_quota: "oran servisinin aylık kotası azaldığı için çekme durduruldu",
+  quota: "oran servisinin kotası doldu",
+  error: "oran servisine ulaşılamadı",
+};
+function oddsWarning() {
+  if (!DATA || state.sport === "minor") return null;
+  const st = DATA.odds_status && DATA.odds_status[state.sport];
+  if (!st || st.ok) return null;
+  const t = DATA.odds_updated && DATA.odds_updated[state.sport];
+  return h("p", { class: "odds-warn", role: "status" }, h("b", {}, "Oranlar güncellenemedi"),
+    ` (${ODDS_REASON[st.reason] || "bilinmeyen hata"}). `,
+    t ? `Gösterilen oranlar ${fmtDateTime(t)} tarihli; iddaa'daki güncel oranla karşılaştır.` : "Oran yok.");
+}
 function minorNote() {
   return h("p", { class: "small muted minor-note" }, "Bu liglerin bahis oranı çekilmiyor: olasılıklar sadece kendi ",
     "modelimizden (geçmiş maçlar, gol ve xG). Adil oran = 1 / olasılık; iddaa oranı bundan yüksekse model o seçeneği ",
@@ -202,7 +225,7 @@ function viewCoupons(root) {
   const day = days()[state.day];
   root.replaceChildren(
     h("h1", {}, "Günün kuponları"),
-    sportSwitch(render), dayChips(render),
+    sportSwitch(render), quotaLine() || "", oddsWarning() || "", dayChips(render),
     h("div", { class: "grid" }, KINDS.map(([kind, title, desc]) => couponCard(day, kind, title, desc))),
     note(),
   );
@@ -243,7 +266,8 @@ function headline(m) {
 function viewMatches(root) {
   const render = () => viewMatches(root);
   const day = days()[state.day];
-  const kids = [h("h1", {}, "Maçlar"), sportSwitch(render, true), dayChips(render)];
+  const kids = [h("h1", {}, "Maçlar"), sportSwitch(render, true), quotaLine(), oddsWarning(), dayChips(render)]
+    .filter(Boolean);
   if (state.sport === "minor") kids.push(minorNote());
   if (!day || !day.matches.length) {
     kids.push(h("p", { class: "empty" }, "Bu gün için maç yok."));
@@ -284,6 +308,8 @@ function viewMatch(root, id) {
     h("h1", {}, matchLabel(m)),
     h("p", { class: "muted small" }, `${m.competition}  ${fmtDateTime(m.kickoff)}`, started(m) ? "  (başladı)" : ""),
   ];
+  const warn = !isMinor(m) && oddsWarning();
+  if (warn) kids.push(warn);
   const e = m.expected;
   kids.push(m.sport !== "basketball"
     ? h("div", { class: "expected" }, h("div", {}, h("span", { class: "small muted" }, `${m.home} beklenen gol`), h("b", {}, e.home.toFixed(2))),
