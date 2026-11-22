@@ -556,7 +556,7 @@ function viewPerformance(root) {
       "Süper Lig, 5 büyük lig, Şampiyonlar Ligi ve Avrupa Ligi; sonuçlar maçtan sonraki ilk güncellemede eklenir.")];
   if (!p || !p.n) {
     kids.push(h("p", { class: "empty" }, "Canlı ölçüm: henüz sonuçlanmış maç yok. Maçlar bittikçe burada görünecek."),
-      ...backtestBlock(), ...minorBlock(), note());
+      ...blendLiveBlock(), ...backtestBlock(), ...minorBlock(), note());
     root.replaceChildren(...kids);
     return;
   }
@@ -612,7 +612,7 @@ function viewPerformance(root) {
         `${brier(inj.injury_brier)}. `, inj.proven ? "Düzeltme işe yarıyor."
           : `Kanıt için en az ${inj.min_n} maçta, farkın standart hatasından büyük olması gerekiyor; o zamana kadar olasılıklara katılmaz.`));
   }
-  kids.push(...backtestBlock(), ...minorBlock(), note());
+  kids.push(...blendLiveBlock(), ...backtestBlock(), ...minorBlock(), note());
   root.replaceChildren(...kids);
 }
 function minorBlock() {
@@ -708,7 +708,40 @@ function route() {
   else if (hash.startsWith("#/kupon")) viewKupon(root);
   else if (hash.startsWith("#/performans")) viewPerformance(root);
   else viewCoupons(root);
+  const nb = noticesBar();
+  if (nb) root.prepend(nb);
   window.scrollTo(0, 0);
+}
+/* Kullanıcıya duyurular (ör. harman canlıda piyasadan kötü çıkınca piyasaya dönüldü); son 30 gün. */
+function noticesBar() {
+  const recent = (DATA.notices || []).filter((n) => Date.now() - new Date(n.at).getTime() < 30 * 86400 * 1000);
+  if (!recent.length) return null;
+  return h("div", { class: "notices", role: "status" }, recent.map((n) =>
+    h("p", { class: "odds-warn" }, h("b", {}, "Duyuru: "), n.text, h("small", { class: "muted" }, `  (${fmtDate(n.at)})`))));
+}
+/* Harman ve piyasa canlıda ayrı ayrı (§26-5): aynı maçlarda Brier; 200 maçta harman kötüyse site piyasaya döner. */
+function blendLiveBlock() {
+  const b = DATA.blend;
+  if (!b) return [];
+  const l = b.live;
+  const out = [h("h2", {}, "Canlı: harman ve piyasa")];
+  if (!l || !l.n) {
+    out.push(h("p", { class: "small muted" }, b.use_on_site
+      ? `Sitede harman gösteriliyor. Maçlar sonuçlandıkça harman ve piyasa burada ayrı ayrı ölçülecek; ${l ? l.min_n : 200} maçtan sonra harman piyasadan kötüyse site kendiliğinden piyasaya döner.`
+      : "Sitede piyasa olasılığı gösteriliyor."));
+    return out;
+  }
+  const better = l.blend_brier < l.market_brier;
+  out.push(h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, `Maç sonucu (1X2), ${l.n} maç`), h("th", { class: "num" }, "Brier"))),
+      h("tbody", {},
+        h("tr", {}, h("td", {}, "Piyasa"), h("td", { class: better ? "num" : "num good" }, h("b", {}, brier(l.market_brier)))),
+        h("tr", {}, h("td", {}, "Harman"), h("td", { class: better ? "num good" : "num" }, h("b", {}, brier(l.blend_brier))))))),
+    h("p", { class: "small muted" }, l.n < l.min_n
+      ? `Karar için ${l.min_n} maç gerekiyor (şu an ${l.n}); o zamana kadar fark şansa çok bağlı.`
+      : (b.use_on_site ? "Harman canlıda piyasadan kötü değil; sitede harman gösterilmeye devam ediyor."
+        : "Sitede piyasa olasılığı gösteriliyor.")));
+  return out;
 }
 
 async function init() {
