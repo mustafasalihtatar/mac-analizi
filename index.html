@@ -6,16 +6,29 @@
 <meta name="theme-color" content="#0F2A22">
 <title>Maç Analiz</title>
 <meta name="description" content="Arkadaşlar arası maç analizi ve kupon kurma.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20261122155722">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Maç Analiz">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preload" href="fonts/barlow-latin-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css?v=20261122162507">
 </head>
 <body>
 <header class="top">
   <a class="brand" href="#/">Maç Analiz</a>
   <p class="updated" id="updated">Yükleniyor…</p>
 </header>
+<div class="banner" id="net-banner" role="status" hidden>
+  <span id="net-text"></span>
+  <button type="button" id="net-reload">Yenile</button>
+</div>
+<div class="banner update" id="sw-banner" role="alert" hidden>
+  <span>Yeni sürüm var.</span>
+  <button type="button" id="sw-reload">Yenile</button>
+</div>
 <main id="view" tabindex="-1"></main>
 <nav class="tabs" aria-label="Bölümler">
   <a href="#/" data-tab="kuponlar">Kuponlar</a>
@@ -25,7 +38,7 @@
   <a href="#/gecmis" data-tab="gecmis">Geçmiş</a>
 </nav>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script src="history.js?v=20261122155722"></script>
-<script src="app.js?v=20261122155722"></script>
+<script src="history.js?v=20261122162507"></script>
+<script src="app.js?v=20261122162507"></script>
 </body>
 </html>

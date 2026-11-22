@@ -1142,6 +1142,7 @@ async function init() {
     const res = await fetch(`data.json?t=${Date.now()}`, { cache: "no-store" });
     if (!res.ok) throw new Error(res.status);
     DATA = await res.json();
+    showNetBanner(res.headers.get("X-Macanaliz-Cache")); // service worker önbellekten verdiyse: "offline" | "slow"
   } catch {
     document.getElementById("updated").textContent = "";
     document.getElementById("view").replaceChildren(h("p", { class: "empty" }, "Veri yüklenemedi; sayfayı yenileyin."));
@@ -1156,4 +1157,50 @@ async function init() {
   window.addEventListener("hashchange", route);
   route();
 }
+
+/* ---------- PWA: bağlantı bandı ve service worker güncellemesi ---------- */
+function showNetBanner(mode) {
+  const banner = document.getElementById("net-banner");
+  if (mode !== "offline" && mode !== "slow") { banner.hidden = true; return; }
+  const when = DATA && DATA.generated_at ? fmtDateTime(DATA.generated_at) : "bilinmiyor";
+  document.getElementById("net-text").textContent =
+    `${mode === "slow" ? "Bağlantı yavaş" : "Çevrimdışı"} – son veri: ${when}`;
+  banner.hidden = false;
+}
+
+function setupServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  document.getElementById("net-reload").addEventListener("click", () => location.reload());
+  const hadController = !!navigator.serviceWorker.controller; // ilk kurulumda sayfa yenilenmesin
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+  const banner = document.getElementById("sw-banner");
+  const offer = (worker) => {
+    banner.hidden = false;
+    document.getElementById("sw-reload").onclick = () => {
+      banner.querySelector("button").disabled = true;
+      worker.postMessage("SKIP_WAITING");
+    };
+  };
+  navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => {
+    // Önceki oturumda bildirilip uygulanmamış sürüm: açılışta hemen geçilir, eski sürüm takılı kalmaz
+    if (reg.waiting && hadController) { reg.waiting.postMessage("SKIP_WAITING"); return; }
+    reg.addEventListener("updatefound", () => {
+      const w = reg.installing;
+      if (!w) return;
+      w.addEventListener("statechange", () => {
+        if (w.state === "installed" && navigator.serviceWorker.controller) offer(w);
+      });
+    });
+    const check = () => reg.update().catch(() => { /* çevrimdışı */ });
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
+    setInterval(check, 30 * 60 * 1000);
+  }).catch(() => { /* service worker desteklenmiyor / engelli: site normal çalışır */ });
+}
+
+setupServiceWorker();
 init();
