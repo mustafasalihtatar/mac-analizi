@@ -319,11 +319,13 @@ function viewMatch(root, id) {
 
   const minor = isMinor(m);
   const pm = minor ? null : probs3(m, "market_prob"), pmod = probs3(m, minor ? "prob" : "model_prob");
+  const pbl = minor ? null : probs3(m, "blend_prob");
   if (pm || pmod) {
     const names = [m.home, "Beraberlik", m.away];
     kids.push(h("div", { class: "pbars" },
       pm ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Piyasa"), pbar(pm)) : null,
       pmod ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Model"), pbar(pmod)) : null,
+      pbl ? h("div", { class: "pbar-row" }, h("span", { class: "lbl" }, "Harman"), pbar(pbl)) : null,
       h("div", { class: "pbar-legend" }, names.map((n, i) =>
         h("span", {}, h("i", { class: `dot seg-${OUT3[i]}` }), n)))));
   }
@@ -334,6 +336,7 @@ function viewMatch(root, id) {
     "kurduğumuz model; Süper Lig, 5 büyük lig ve Avrupa kupalarında, diğerlerinde –. ",
     `Model piyasadan ${Math.round(EDGE * 100)}+ puan ayrılınca işaretlenir (yeşil: model daha yüksek görüyor). `,
     "Geçmiş testte piyasa daha isabetli çıktı; fark bir fikir verir, kesin değer değildir. ",
+    pbl ? blendNote() : "",
     "Model gol sayısını genelde piyasadan az bekliyor; alt/üst farklarına bu gözle bakın."));
   for (const [market, title] of Object.entries(GROUPS)) {
     const opts = m.options.filter((o) => o.market === market);
@@ -353,13 +356,16 @@ function viewMatch(root, id) {
         title: o.price && !o.addable ? "Çeyrek çizgi: yarım kazanç/iade kuralı nedeniyle kupona eklenemez" : null,
         onclick: () => { toggleOption(m, o); render(); } },
         h("span", { class: "p" }, h("span", {}, o.pick),
-          h("span", { class: "prob" }, `Piyasa ${pct(o.market_prob ?? o.prob)} adil ${odds(o.fair)}`),
+          h("span", { class: "prob" }, DATA.blend && DATA.blend.use_on_site && o.market_prob != null && Math.abs(o.prob - o.market_prob) > 0.0005
+            ? `Harman ${pct(o.prob)} adil ${odds(o.fair)} (piyasa ${pct(o.market_prob)})`
+            : `Piyasa ${pct(o.market_prob ?? o.prob)} adil ${odds(o.fair)}`),
           h("span", { class: "prob model" }, `Model ${pct(o.model_prob)}`,
             flag ? h("span", { class: d > 0 ? "diff up" : "diff down" }, pts(d)) : null)),
         h("span", { class: "odds" }, o.price ? odds(o.price) : "–"));
     })));
   }
   kids.push(...statsBlock(m));
+  kids.push(...injuryBlock(m));
   if (m.info) kids.push(...infoBlock(m));
   kids.push(note(minor));
   root.replaceChildren(...kids);
@@ -409,6 +415,20 @@ function statsBlock(m) {
     if (notes.length) out.push(h("ul", { class: "xg-notes" }, notes.map((t) => h("li", {}, t))));
   }
   return out;
+}
+/* Sakat/cezalı oyuncular (§26-4): sadece eksik adları ve hesaplanan beklenen gol farkı; olasılıklara dahil değil. */
+function injuryBlock(m) {
+  const j = m.injuries;
+  if (!j) return [];
+  const sign = (x) => (x > 0 ? "+" : x < 0 ? "−" : "±") + Math.abs(x).toFixed(1).replace(".", ",") + "%";
+  const side = (name, t) => h("div", {}, h("h3", {}, name),
+    t && t.missing.length ? h("p", { class: "small" }, t.missing.join(", ")) : h("p", { class: "small muted" }, "Bildirilen eksik yok."),
+    t && (t.attack_pct || t.defence_pct) ? h("p", { class: "small muted" },
+      `Tahmini etki: attığı gol ${sign(t.attack_pct)}, yediği gol ${sign(t.defence_pct)}`) : null);
+  return [h("h2", {}, "Eksikler (sakat / cezalı)"),
+    h("div", { class: "two" }, side(m.home, j.home), side(m.away, j.away)),
+    h("p", { class: "small muted" }, "Etki, oyuncunun son 10 maçtaki süresi ve gol+asist payından hesaplanır. ",
+      "Bu düzeltme şimdilik sadece ölçülüyor; yukarıdaki olasılıklara dahil değil.")];
 }
 function minorOrModel(m) {
   return isMinor(m) ? "En olası skorlar (kendi model):" : "En olası skorlar (sitede gösterilen olasılıklarla):";
@@ -585,6 +605,13 @@ function viewPerformance(root) {
           OUT.map((k) => h("td", { class: k === won ? (k === fav ? "num hit" : "num act") : "num" }, pct(r[`p_${k}`]))));
       })))),
     h("p", { class: "small muted" }, "Yeşil: favori dediğimiz sonuç oldu. Sarı: gerçekleşen sonuç (favori değildi)."));
+  const inj = p.injury;
+  if (inj && inj.n) {
+    kids.push(h("h2", {}, "Sakatlık düzeltmesi (deneme)"),
+      h("p", { class: "small" }, `${inj.n} maçta kendi model Brier ${brier(inj.model_brier)}, eksik oyuncularla düzeltilmiş `,
+        `${brier(inj.injury_brier)}. `, inj.proven ? "Düzeltme işe yarıyor."
+          : `Kanıt için en az ${inj.min_n} maçta, farkın standart hatasından büyük olması gerekiyor; o zamana kadar olasılıklara katılmaz.`));
+  }
   kids.push(...backtestBlock(), ...minorBlock(), note());
   root.replaceChildren(...kids);
 }
@@ -610,10 +637,18 @@ function minorBlock() {
   }
   return out;
 }
+function blendNote() {
+  const b = DATA.blend;
+  const head = "Harman: piyasa ve modelin geçmiş maçlarla öğrenilmiş birleşimi. ";
+  if (!b) return head;
+  return head + (b.use_on_site ? "Testte piyasadan isabetli çıktığı için gösterilen olasılık harmandır. "
+    : "Testte piyasayı belirgin geçemediği için gösterilen olasılık piyasadır. ");
+}
 function backtestBlock() {
   const b = DATA.backtest;
   if (!b) return [];
-  const rows = [["Piyasa (sitede gösterilen)", b.market], ["Kendi model", b.model]];
+  const onSite = DATA.blend && DATA.blend.use_on_site;
+  const rows = [[onSite ? "Piyasa (kapanış)" : "Piyasa (sitede gösterilen)", b.market], ["Kendi model", b.model]];
   const better = (k, lowGood) => (lowGood ? (b.market[k] <= b.model[k] ? 0 : 1) : (b.market[k] >= b.model[k] ? 0 : 1));
   const cell = (r, i, k, lowGood, fmt) =>
     h("td", { class: better(k, lowGood) === i ? "num good" : "num" }, h("b", {}, fmt(r[k])));
@@ -629,7 +664,17 @@ function backtestBlock() {
       h("tbody", {}, rows.map(([name, r], i) => h("tr", {}, h("td", {}, name),
         cell(r, i, "accuracy", false, pct), cell(r, i, "brier", true, brier)))))),
     h("p", { class: "small muted" }, "Yeşil: daha iyi olan. Brier kıyası (her sonuca %33): 0.667. ",
-      "Kapanış oranlarını yenmek çok zordur; bu yüzden sitede piyasa olasılığı gösterilir, model yanında bilgi olarak durur.")];
+      onSite ? "Kapanış oranlarını yenmek çok zordur; model tek başına geride kalıyor. Sitede piyasa ve modelin harmanı gösterilir (aşağıda)."
+        : "Kapanış oranlarını yenmek çok zordur; bu yüzden sitede piyasa olasılığı gösterilir, model yanında bilgi olarak durur.")];
+  const bl = DATA.blend;
+  if (bl && bl.blend_brier != null) {
+    out.push(h("h3", { class: "sub" }, "Harman (piyasa + model)"),
+      h("p", { class: "small" }, `Geçen sezonla öğrenildi, bu sezonun ${bl.n_test} maçında test edildi: Brier piyasa `,
+        `${brier(bl.market_brier)}, harman ${brier(bl.blend_brier)}. `,
+        bl.use_on_site ? "Fark standart hatasından büyük olduğu için sitede harman gösteriliyor (fark küçük)."
+          : "Fark belirgin olmadığı için sitede piyasa gösteriliyor."));
+  }
+  if (onSite) return out;  // aşağıdaki kalibrasyon grafiği piyasa içindir
   if (b.calibration && b.calibration.length) {
     out.push(h("h3", { class: "sub" }, "Sitedeki olasılıklar ne kadar dürüst?"),
       h("div", { class: "card calib-card" }, calibrationChart(b.calibration)),
