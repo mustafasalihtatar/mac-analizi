@@ -1,7 +1,7 @@
 /* Maç Analiz — service worker (PWA). Tüm yollar bu dosyanın kapsamına göre (GitHub Pages: /mac-analizi/).
    VERSION her yayında `prepare_site` tarafından zaman damgasıyla değiştirilir ("dev" sadece yerelde).
    localStorage'a (kupon, geçmiş) dokunmaz; sadece Cache Storage kullanır. */
-const VERSION = "20261122165721";
+const VERSION = "20261122172517";
 const APP_CACHE = `macanaliz-app-${VERSION}`;
 const DATA_CACHE = "macanaliz-data";    // son data.json (sürümden bağımsız: yeni sürümde de çevrimdışı veri kalsın)
 const LOGO_CACHE = "macanaliz-logos-v1"; // armalar değişmez, sürümler arasında korunur
@@ -11,7 +11,7 @@ const DATA_TIMEOUT_MS = 4000;
 const FONTS = ["barlow-latin-400", "barlow-latin-ext-400", "barlow-latin-500", "barlow-latin-ext-500",
   "barlow-latin-600", "barlow-latin-ext-600", "barlow-condensed-latin-500", "barlow-condensed-latin-ext-500",
   "barlow-condensed-latin-700", "barlow-condensed-latin-ext-700"].map((f) => `fonts/${f}.woff2`);
-const APP_FILES = ["./", "index.html", `style.css?v=${VERSION}`, `history.js?v=${VERSION}`, `iddaa.js?v=${VERSION}`, `app.js?v=${VERSION}`,
+const APP_FILES = ["./", "index.html", `style.css?v=${VERSION}`, `history.js?v=${VERSION}`, `iddaa.js?v=${VERSION}`, `value.js?v=${VERSION}`, `app.js?v=${VERSION}`,
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png",
   "icons/apple-touch-icon.png", ...FONTS];
 

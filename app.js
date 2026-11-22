@@ -1232,11 +1232,102 @@ function backtestBlock() {
 }
 
 /* ---------- yönlendirme ---------- */
+/* ---------- görünüm: Değerli (§30) ----------
+   Liste yayında kurulur (data.json value.picks: ham model − piyasa ≥ eşik); burada iddaa oranları eklenir. */
+const VALUE_NOTE = "Bu liste modelin piyasadan ayrıldığı seçenekleri gösterir; kazanç garantisi değildir. " +
+  "Model piyasayı geçmişte yenemediyse bu seçimler de yenmeyebilir.";
+const UNDER_NOTE = "Modelin bilinen Alt eğilimi var, takip sonucunu bekle.";
+const signedPct = (x) => (x == null ? "–" : `${x > 0 ? "+" : x < 0 ? "−" : ""}%${Math.abs(x * 100).toFixed(1).replace(".", ",")}`);
+function valueCard(r) {
+  const ref = byId.get(r.match);
+  const m = ref && ref.match, o = m && m.options.find((x) => x.key === r.key);
+  const mv = Value.move(r);
+  const cell = (lbl, val, cls) => h("div", { class: cls ? `vc ${cls}` : "vc" }, h("span", { class: "small muted" }, lbl), h("b", {}, val));
+  return h("div", { class: "card vcard" },
+    h("div", { class: "vhead" },
+      h("a", { class: "vmatch", href: `#/mac/${encodeURIComponent(r.match)}` }, `${r.home} – ${r.away}`),
+      h("span", { class: "small muted" }, fmtDateTime(r.kickoff))),
+    h("div", { class: "vpick" }, h("b", {}, r.pick), r.minor ? h("span", { class: "pill unv" }, "doğrulanmamış model")
+      : r.below ? h("span", { class: "pill" }, "eşik altı") : h("span", { class: "pill" }, r.group || "")),
+    h("div", { class: "vgrid" },
+      r.minor ? null : cell("Piyasa", pct(r.market_prob)),
+      cell("Model", pct(r.model_prob)),
+      r.minor || r.blend_prob == null ? null : cell("Harman", pct(r.blend_prob)),
+      r.diff == null ? null : cell("Fark", pts(r.diff), r.diff > 0 ? "up" : null),
+      cell("Adil oran", odds(r.fair)),
+      r.minor ? null : cell("Yurtdışı", odds(r.price))),
+    mv ? h("p", { class: "small muted" }, `Oran (şirket ortalaması) ilk görülen ${odds(mv.first)} → son ${odds(mv.last)} `,
+      `(${signedPct(mv.change)})`) : null,
+    r.group === "Alt/Üst" ? h("p", { class: "small warn" }, UNDER_NOTE) : null,
+    m && o ? iddaaRow(m, o, r.minor, null).el : null);
+}
+function viewValue(root) {
+  const v = DATA.value;
+  const kids = [h("h1", {}, "Değerli"), h("p", { class: "card value-note" }, VALUE_NOTE)];
+  if (!v) {
+    kids.push(h("p", { class: "empty" }, "Bu yayında liste yok."), note());
+    root.replaceChildren(...kids);
+    return;
+  }
+  const { rows, minor } = Value.build(v.picks, state.iddaa, (id) => (byId.get(id) || {}).match, new Date());
+  kids.push(h("p", { class: "small muted" },
+    `Kendi modelin (ham) olasılığı piyasadan en az ${Math.round(v.threshold * 100)} puan yüksek olan, oranı olan seçenekler; `,
+    "aynı maçta pazar başına en büyük fark. Harman sadece bilgi için. Adil oran = 1 ÷ model olasılığı. ",
+    "iddaa oranı girersen beklenen değer (sitede gösterilen olasılıkla) çıkar; beklenen değeri pozitif olanlar en üstte. ",
+    "iddaa oranı girdiğin ama eşik altında kalan seçenekler de \"eşik altı\" etiketiyle görünür."));
+  if (!rows.length) kids.push(h("p", { class: "empty" }, "Şu an eşiği geçen seçenek yok."));
+  else kids.push(h("div", { class: "vlist" }, rows.map((r) => valueCard(r))));
+  if (minor.length) {
+    kids.push(h("h2", {}, "Diğer ligler (doğrulanmamış model)"),
+      h("p", { class: "small muted" }, "Bu liglerde piyasa olasılığı yok; sadece iddaa oranı girdiğin seçenekler, model olasılığıyla. Takibe girmez."),
+      h("div", { class: "vlist" }, minor.map((r) => valueCard(r))));
+  }
+  kids.push(...valueTracking(v));
+  kids.push(note());
+  root.replaceChildren(...kids);
+}
+function valueTracking(v) {
+  const t = v.tracking;
+  const out = [h("h2", {}, "Takip")];
+  if (!t || !t.n) {
+    out.push(h("p", { class: "empty" }, "Henüz listeye giren seçenek kaydı yok. Her yayında listeye girenler o anki olasılık ve oranlarla kaydedilir."));
+    return out;
+  }
+  out.push(h("div", { class: "stats" },
+    h("div", {}, h("span", { class: "small muted" }, "Listeye giren"), h("b", {}, t.n)),
+    h("div", {}, h("span", { class: "small muted" }, "Sonuçlanan"), h("b", {}, t.settled)),
+    h("div", {}, h("span", { class: "small muted" }, "Tuttu"), h("b", {}, rate(t.hit_rate))),
+    h("div", {}, h("span", { class: "small muted" }, "Piyasa bekliyordu"), h("b", {}, rate(t.market_expected))),
+    h("div", {}, h("span", { class: "small muted" }, "Model bekliyordu"), h("b", {}, rate(t.model_expected)))));
+  if (!t.reliable) {
+    out.push(h("p", { class: "warn" }, `Henüz güvenilir değil: ${t.settled} sonuçlanmış seçenek var, en az ${v.min_reliable} gerekli. `,
+      "Bu kadar az seçenekte tutma oranı çoğunlukla şanstır."));
+  }
+  const mv = t.moves;
+  out.push(h("p", { class: "small" }, mv && mv.n
+    ? `Başlamış ${mv.n} seçenekte oran ilk görülmeden son görülmeye: %${Math.round(mv.dropped * 100)}'i düştü, ortalama değişim ${signedPct(mv.mean_change)}. `
+    : "Oran hareketi: henüz en az iki kez oranı görülmüş, başlamış seçenek yok. ",
+    "Oranı düşen seçenek, piyasanın sonradan modelin tarafına geçtiğini, yani modelin doğru bilgiyi erken yakaladığını gösterir."));
+  out.push(h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, ["Pazar", "Giren", "Sonuçlanan", "Tuttu", "Piyasa", "Model", "Oran düştü", "Birim kazanç"]
+      .map((c, i) => h("th", { class: i ? "num" : null }, c)))),
+    h("tbody", {}, t.groups.map((g) => h("tr", {},
+      h("td", {}, g.group), h("td", { class: "num" }, g.n), h("td", { class: "num" }, g.settled),
+      h("td", { class: "num" }, rate(g.hit_rate)), h("td", { class: "num" }, rate(g.market_expected)),
+      h("td", { class: "num" }, rate(g.model_expected)),
+      h("td", { class: "num" }, g.moves.n ? `%${Math.round(g.moves.dropped * 100)} (${g.moves.n})` : "–"),
+      h("td", { class: "num" }, signedPct(g.roi))))))),
+    h("p", { class: "small muted" }, "Tuttu / Piyasa / Model: sonuçlanan seçeneklerde gerçek tutma oranı ile piyasanın ve modelin ",
+      "ortalama olasılığı (iadeler hariç). Model piyasadan iyiyse Tuttu, Piyasa'dan yüksek çıkar. Birim kazanç: listeye ",
+      "girdiği andaki yurtdışı oranla, seçenek başına 1 birim. Alt/Üst satırında modelin bilinen Alt eğilimi var; takip sonucunu bekle."));
+  return out;
+}
 function route() {
   const root = document.getElementById("view");
   const hash = location.hash || "#/";
   const tab = hash.startsWith("#/kupon") ? "kupon" : hash.startsWith("#/mac") ? "maclar"
-    : hash.startsWith("#/performans") ? "performans" : hash.startsWith("#/gecmis") ? "gecmis" : "kuponlar";
+    : hash.startsWith("#/performans") ? "performans" : hash.startsWith("#/gecmis") ? "gecmis"
+    : hash.startsWith("#/degerli") ? "degerli" : "kuponlar";
   document.querySelectorAll(".tabs a").forEach((a) => {
     if (a.dataset.tab === tab) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -1254,6 +1345,7 @@ function route() {
   else if (hash.startsWith("#/maclar")) viewMatches(root);
   else if (hash.startsWith("#/kupon")) viewKupon(root);
   else if (hash.startsWith("#/performans")) viewPerformance(root);
+  else if (hash.startsWith("#/degerli")) viewValue(root);
   else if (hash.startsWith("#/gecmis/")) {
     let id = "";
     try { id = decodeURIComponent(hash.slice(9)); } catch { /* bozuk adres */ }

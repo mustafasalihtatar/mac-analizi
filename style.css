@@ -301,3 +301,17 @@ select { font: inherit; color: var(--light); background: var(--pitch); border: 1
 /* §28 NBA */
 .warn-text { color: var(--board); }
 h2.sport-head { margin-top: 34px; padding-top: 14px; border-top: 2px solid var(--line); }
+
+/* §30 Değerli */
+.value-note { color: var(--light); font-size: 14px; border-color: var(--board); }
+.vlist { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.vcard { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.vhead { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.vmatch { color: var(--light); font-weight: 600; text-decoration: none; }
+.vpick { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.vgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; }
+.vc { display: flex; flex-direction: column; }
+.vc b { font-family: var(--cond); font-size: 20px; line-height: 1.1; }
+.vc.up b { color: var(--green); }
+.vcard .warn { margin: 0; }
+@media (max-width: 420px) { .vlist { grid-template-columns: 1fr; } .tabs a { font-size: 12px; } }
