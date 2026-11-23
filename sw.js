@@ -1,7 +1,7 @@
 /* Maç Analiz — service worker (PWA). Tüm yollar bu dosyanın kapsamına göre (GitHub Pages: /mac-analizi/).
    VERSION her yayında `prepare_site` tarafından zaman damgasıyla değiştirilir ("dev" sadece yerelde).
    localStorage'a (kupon, geçmiş) dokunmaz; sadece Cache Storage kullanır. */
-const VERSION = "20261122180900";
+const VERSION = "20261123084635";
 const APP_CACHE = `macanaliz-app-${VERSION}`;
 const DATA_CACHE = "macanaliz-data";    // son data.json (sürümden bağımsız: yeni sürümde de çevrimdışı veri kalsın)
 const LOGO_CACHE = "macanaliz-logos-v1"; // armalar değişmez, sürümler arasında korunur
