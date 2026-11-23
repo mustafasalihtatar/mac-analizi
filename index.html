@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0F2A22">
+<meta name="theme-color" content="#0D1014">
 <title>Maç Analiz</title>
 <meta name="description" content="Arkadaşlar arası maç analizi ve kupon kurma.">
 <link rel="manifest" href="manifest.webmanifest">
@@ -13,14 +13,21 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Maç Analiz">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="preload" href="fonts/barlow-latin-400.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261123084635">
+<script>
+/* Tema (Sistem / Koyu / Açık) ilk boyamadan önce: sayfa yanlış renkte yanıp sönmesin. Ayar Geçmiş > Ayarlar'da. */
+(function () {
+  var t = null;
+  try { t = localStorage.getItem("macanaliz.tema.v1"); } catch (e) { /* kayıt alanı kapalı: sistem ayarı */ }
+  var dark = t === "dark" || (t !== "light" && !(window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches));
+  if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+  document.querySelector('meta[name="theme-color"]').setAttribute("content", dark ? "#0D1014" : "#F2F2F7");
+})();
+</script>
+<link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css?v=20261123095609">
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="#/">Maç Analiz</a>
-  <p class="updated" id="updated">Yükleniyor…</p>
-</header>
 <div class="banner" id="net-banner" role="status" hidden>
   <span id="net-text"></span>
   <button type="button" id="net-reload">Yenile</button>
@@ -29,19 +36,28 @@
   <span>Yeni sürüm var.</span>
   <button type="button" id="sw-reload">Yenile</button>
 </div>
-<main id="view" tabindex="-1"></main>
-<nav class="tabs" aria-label="Bölümler">
-  <a href="#/" data-tab="kuponlar">Kuponlar</a>
-  <a href="#/maclar" data-tab="maclar">Maçlar</a>
-  <a href="#/kupon" data-tab="kupon">Kuponum <span class="badge" id="kupon-count" hidden></span></a>
-  <a href="#/degerli" data-tab="degerli">Değerli</a>
-  <a href="#/performans" data-tab="performans">Performans</a>
-  <a href="#/gecmis" data-tab="gecmis">Geçmiş</a>
+<main id="view" tabindex="-1"><p class="empty">Yükleniyor…</p></main>
+<nav class="tabbar" aria-label="Bölümler">
+  <a href="#/" data-tab="bugun">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path class="on-fill" d="M12 8l3.2 2.3-1.2 3.7h-4l-1.2-3.7z"/><path d="M12 8V3.5M15.2 10.3l4.2-1.4M14 14l2.6 3.6M10 14l-2.6 3.6M8.8 10.3L4.6 8.9"/></svg>
+    <span>Bugün</span></a>
+  <a href="#/degerli" data-tab="degerli">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle class="on-fill" cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/></svg>
+    <span>Değerli</span></a>
+  <a href="#/kupon" data-tab="kupon">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v3a2 2 0 0 0 0 4v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a2 2 0 0 0 0-4z"/><path d="M15 6v2M15 11v2M15 16v2"/></svg>
+    <span>Kupon</span><span class="count" id="kupon-count" hidden></span></a>
+  <a href="#/gecmis" data-tab="gecmis">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 4v4h4"/><path d="M12 8v4l2.8 1.8"/></svg>
+    <span>Geçmiş</span></a>
+  <a href="#/performans" data-tab="performans">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>
+    <span>Performans</span></a>
 </nav>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script src="history.js?v=20261123084635"></script>
-<script src="iddaa.js?v=20261123084635"></script>
-<script src="value.js?v=20261123084635"></script>
-<script src="app.js?v=20261123084635"></script>
+<script src="history.js?v=20261123095609"></script>
+<script src="iddaa.js?v=20261123095609"></script>
+<script src="value.js?v=20261123095609"></script>
+<script src="app.js?v=20261123095609"></script>
 </body>
 </html>
