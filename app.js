@@ -418,9 +418,14 @@ function viewToday(root) {
     }
     const two = state.sport === "basketball";
     for (const g of groups) {
+      const allDone = g.list.every(isDone); // §32 Dün: sütun başlığı yerine "SKOR"
+      const lg = seasonLeague(g.list[0].comp); // §33 simülasyonu olan lig: başlık lig sayfasına bağlantı
       kids.push(h("section", { class: "league", "aria-label": g.comp },
-        h("div", { class: "cols", "aria-hidden": "true", style: two ? "grid-template-columns:minmax(0,1fr) 40px 40px" : null },
-          h("span", { class: "lg-name", lang: "en" }, g.comp), /* veri adları İngilizce: SPAIN, SPAİN değil */ (two ? ["1", "2"] : ["1", "X", "2"]).map((c) => h("span", {}, c))),
+        h("div", { class: "cols", style: allDone ? "grid-template-columns:minmax(0,1fr) auto" : two ? "grid-template-columns:minmax(0,1fr) 40px 40px" : null },
+          lg ? h("a", { class: "lg-link", href: `#/lig/${lg.comp}`, "aria-label": `${lg.name}: puan tablosu ve sezon simülasyonu` },
+              h("span", { class: "lg-name", lang: "en" }, g.comp), h("span", { class: "lg-go", "aria-hidden": "true" }, "Tablo ›"))
+            : h("span", { class: "lg-name", lang: "en", "aria-hidden": "true" }, g.comp), /* veri adları İngilizce: SPAIN, SPAİN değil */
+          (allDone ? ["SKOR"] : two ? ["1", "2"] : ["1", "X", "2"]).map((c) => h("span", { "aria-hidden": "true" }, c))),
         card(g.list.map(matchRow))));
     }
   }
@@ -429,7 +434,25 @@ function viewToday(root) {
     note(state.sport === "minor"), quotaLine());
   root.replaceChildren(...kids.filter(Boolean));
 }
+/* §32 biten maç: skor + "model ✓/✗" rozeti (modelin en yüksek olasılık verdiği sonuç gerçekleşti mi). */
+const isDone = (m) => m.score != null;
+function hitBadge(rep, xs) {
+  if (!rep || rep.model_hit == null) return null;
+  return badge(rep.model_hit ? "model ✓" : "model ✗", rep.model_hit ? "good" : "bad", xs ? "xs" : null);
+}
+function doneRow(m) {
+  const rep = m.report, vals = probs3(m, "prob");
+  const label = `${fmtTime(m.kickoff)}, bitti. ${m.home} – ${m.away}, skor ${m.score}`
+    + (rep && rep.model_hit != null ? `, model ${rep.model_hit ? "bildi" : "bilemedi"}` : "");
+  return h("a", { class: "mrow row", href: `#/mac/${encodeURIComponent(m.id)}`, "aria-label": label },
+    h("div", { class: "mrow-top fin", "aria-hidden": "true" },
+      h("span", { class: "time done" }, fmtTime(m.kickoff), h("small", {}, "bitti")),
+      h("div", { class: "teams" }, ["home", "away"].map((s) => h("span", { class: "team" }, crest(m, s), h("span", { class: "nm" }, m[s])))),
+      h("span", { class: "fscore" }, m.score.replace("-", "–"))),
+    h("div", { class: "mrow-bot", "aria-hidden": "true" }, vals ? pbar(vals) : null, hitBadge(rep, true)));
+}
 function matchRow(m) {
+  if (isDone(m)) return doneRow(m);
   const outs = outsOf(m);
   const vals = probs3(m, "prob"); // sitede gösterilen (diğer ligler: model)
   const top = vals ? Math.max(...vals) : null;
@@ -445,6 +468,71 @@ function matchRow(m) {
         : outs.map(() => h("span", { class: "p3" }, "–"))),
     h("div", { class: "mrow-bot", "aria-hidden": "true" }, vals ? pbar(vals) : null,
       e ? badge(edgeText(e), "accent", "xs") : null));
+}
+
+/* ---------- görünüm: lig sayfası (§33 sezon simülasyonu) ----------
+   Puan tablosu + simülasyon sütunları (şampiyonluk / Avrupa / düşme %), haftalık değişim okları, tek cümlelik özet. */
+const seasonLeague = (code) => ((DATA.season && DATA.season.leagues) || []).find((l) => l.comp === code) || null;
+/* Türkçe tamlayan eki: Galatasaray'ın, Bayern Munich'in, Como'nun. Son ünlüye göre. Büyük harfli kısaltmalar harf
+   harf okunur (PSG = pe-se-ge → PSG'nin, AEK → AEK'nın): son harfin okunuşu. */
+const LETTER_SOUND = { A: "a", E: "e", I: "ı", İ: "i", O: "o", Ö: "ö", U: "u", Ü: "ü", K: "ka", H: "he", Q: "kü", W: "ve", X: "iks", Y: "ye" };
+function genitive(name) {
+  const vowels = "aeıioöuüAEIİOÖUÜ";
+  const letters = name.replace(/[^A-Za-zÇĞİÖŞÜçğıöşü]/g, "");
+  const abbr = letters.length >= 2 && letters.length <= 5 && letters === letters.toLocaleUpperCase("tr-TR")
+    && name.trim().split(/\s+/).pop().replace(/[^A-Za-zÇĞİÖŞÜçğıöşü]/g, "") === letters;
+  const sound = abbr ? (LETTER_SOUND[letters.slice(-1)] || `${letters.slice(-1).toLocaleLowerCase("tr-TR")}e`) : letters;
+  const last = [...sound].reverse().find((c) => vowels.includes(c)) || "e";
+  const v = { a: "ı", ı: "ı", e: "i", i: "i", o: "u", u: "u", ö: "ü", ü: "ü" }[last.toLocaleLowerCase("tr-TR")] || "i";
+  const endsVowel = vowels.includes(sound.slice(-1));
+  return `${name}'${endsVowel ? "n" : ""}${v}n`;
+}
+function seasonLead(lg) {
+  const t = lg.teams.reduce((a, b) => (b.champion > a.champion ? b : a));
+  const d = t.delta && t.delta.champion;
+  const ch = d != null && Math.abs(d) >= 0.005 ? `, geçen haftaya göre ${d > 0 ? "+" : "−"}${Math.round(Math.abs(d) * 100)}` : "";
+  return `${genitive(t.name)} şampiyonluk ihtimali ${pct(t.champion)}${ch}.`;
+}
+/* Değişim oku: ≥1 puan. good: artış iyi mi (düşmede artış kötü). Yön yazıyla da var (▲/▼ + sayı). */
+function deltaArrow(d, goodUp, what) {
+  if (d == null || Math.abs(d) < 0.01) return null;
+  const up = d > 0, n = Math.round(Math.abs(d) * 100);
+  return h("small", { class: `dl ${up === goodUp ? "g" : "b"}`, "aria-label": `${what} geçen haftaya göre ${n} puan ${up ? "arttı" : "azaldı"}` },
+    `${up ? "▲" : "▼"}${n}`);
+}
+const zoneText = (z) => (z[0] === z[1] ? `${z[0]}.` : `${z[0]}–${z[1]}.`);
+function viewLeague(root, code) {
+  const lg = seasonLeague(code);
+  if (!lg) { location.replace("#/"); return; }
+  const z = lg.zones, T = lg.teams.length;
+  const edge = (pos) => [z.ucl[1], z.europe[1], z.relegation[0] - 1, z.playoff ? z.playoff[0] - 1 : -1].includes(pos) && pos < T;
+  const cell = (t, k, goodUp, what) => h("td", { class: "pc" }, pct(t[k]), t.delta ? deltaArrow(t.delta[k], goodUp, what) : null);
+  const rows = lg.teams.map((t) => h("tr", { class: edge(t.pos) ? "zedge" : null },
+    h("td", { class: "ps" }, t.pos),
+    h("th", { scope: "row", class: "tm" },
+      h("span", { class: "tn" }, crest({ logos: { home: t.logo } }, "home"), h("span", { class: "nm" }, t.name)),
+      h("small", {}, `${t.played} maç · ŞL ${pct(t.ucl)} · bekl. ${Math.round(t.xpts)}${t.playoff != null && t.playoff >= 0.005 ? ` · play-off ${pct(t.playoff)}` : ""}`)),
+    h("td", {}, t.gd > 0 ? `+${t.gd}` : t.gd), h("td", { class: "pt" }, t.pts),
+    cell(t, "champion", true, "Şampiyonluk"), cell(t, "europe", true, "Avrupa"), cell(t, "relegation", false, "Düşme")));
+  const notes = [`${fmtInt(DATA.season.n_sims)} sezon simüle edildi. Modelin takım güçleri kesin değil: her simüle sezonda güçlere, `
+    + "geçmiş 4 sezonda ölçülen model hatası kadar rastgele sapma eklenir ve güçler sezon içinde haftadan haftaya biraz değişebilir. "
+    + "Sakatlık ve kadro değişiklikleri ayrıca hesaba katılmaz."];
+  if (code === "T1") notes.push("Türkiye Kupası şampiyonu ilk 4'teyse 5. sıra da Avrupa'ya gidebilir.");
+  else notes.push("5. Şampiyonlar Ligi kontenjanı (Avrupa Performans Yeri) sezon sonunda belli olur; burada sayılmaz.");
+  root.replaceChildren(
+    h("div", { class: "topnav" }, backLink("#/", "Bugün")),
+    screenHead(lg.name, h("p", { class: "lead" }, seasonLead(lg))),
+    sec("Puan tablosu ve simülasyon", h("div", { class: "card lt-wrap" },
+      h("table", { class: "ltable" },
+        h("caption", { class: "sr" }, `${lg.name} puan tablosu, şampiyonluk, Avrupa ve düşme olasılıkları`),
+        h("thead", {}, h("tr", {}, ["#", "Takım", "Av", "P", "Şamp.", "Avrupa", "Düşme"].map((x, i) =>
+          h("th", { scope: "col", class: i === 1 ? "tm" : null }, x)))),
+        h("tbody", {}, rows))),
+      h("p", { class: "sec-note" }, `Çizgiler bölge sınırları: Şampiyonlar Ligi ${zoneText(z.ucl)}, Avrupa kupaları ${zoneText(z.europe)}`
+        + (z.playoff ? `, düşme play-off'u ${zoneText(z.playoff)}` : "") + `, düşme ${zoneText(z.relegation)} sıra. `
+        + "Oklar geçen haftaki simülasyona göre değişim (yüzde puanı). Yüzdeler bu sıralarda bitirme olasılığı. "
+        + "Takım adının altında: oynanan maç, Şampiyonlar Ligi olasılığı ve beklenen sezon sonu puanı.")),
+    h("div", { class: "sec" }, notes.map((t) => h("p", { class: "foot" }, t))));
 }
 
 /* ---------- görünüm: maç detayı ---------- */
@@ -472,23 +560,61 @@ function viewMatch(root, id, from) {
     const r = t && src && t.find((x) => x["Takım"] === src);
     return r ? `${r["Sıra"]}. sıra` : null;
   };
-  const e = m.expected;
-  const mid = nba
+  const e = m.expected, done = isDone(m), past = !nba && !e;
+  const mid = done ? h("div", { class: "mid" }, h("small", {}, "Skor"),
+      h("span", { class: "xg", "aria-label": `${m.home} ${m.score.split("-")[0]}, ${m.away} ${m.score.split("-")[1]}` }, m.score.replace("-", "–")))
+    : past ? h("div", { class: "mid" }, h("small", {}, "Sonuç"), h("span", { class: "xg sm" }, "–"))
+    : nba
     ? h("div", { class: "mid" }, h("small", {}, "Ev sahibi farkı"), h("span", { class: "xg sm" }, e.margin == null ? "–" : signedC(e.margin)),
         e.total != null ? h("small", {}, `toplam ${fmtDec(e.total)}`) : null)
     : h("div", { class: "mid" }, h("small", {}, "Beklenen gol"),
         h("span", { class: "xg", "aria-label": `${m.home} ${fmtDec(e.home)}, ${m.away} ${fmtDec(e.away)}` }, `${fmtDec(e.home)}–${fmtDec(e.away)}`));
   const side = (s) => h("div", { class: "side" }, crest(m, s, "lg"), h("b", {}, m[s]), rank(s) ? h("small", {}, rank(s)) : null);
-  const tabs = MTABS[nba ? "basketball" : "football"];
+  const tabs = past || done ? MTABS.football.filter(([k]) => k !== "goals") : MTABS[nba ? "basketball" : "football"];
   const tab = tabs.some(([k]) => k === state.mtab.tab) ? state.mtab.tab : "result";
   const head = h("header", { class: "mhead" },
-    h("p", { class: "meta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`, started(m) ? " · başladı" : ""),
+    h("p", { class: "meta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`, done ? " · bitti" : started(m) ? " · başladı" : ""),
     h("h1", { class: "sr" }, matchLabel(m)),
     h("div", { class: "versus" }, side("home"), mid, side("away")),
+    m.report ? karneCard(m) : null,
     segmented("Bölüm", tabs, tab, (v) => { state.mtab.tab = v; render(); }));
   const body = tab === "goals" ? goalsTab(m, render) : tab === "points" ? pointsTab(m, render)
     : tab === "teams" ? teamsTab(m) : resultTab(m, render);
   root.replaceChildren(top, head, ...body.filter(Boolean), note(isMinor(m)));
+}
+
+/* §32 Karne: gerçek skor, xG, maç öncesi son olasılıklar (piyasa / model), gerçekleşen sonuca verilen olasılık,
+   modelin en olası skoru ve tek cümlelik "kim haklıydı". */
+function outcomeName(m, o, dative) {
+  if (o === "draw") return dative ? "beraberliğe" : "beraberlik";
+  return `${o === "home" ? m.home : m.away} ${dative ? "galibiyetine" : "galibiyeti"}`;
+}
+function verdictText(m, rep) {
+  if (!rep.verdict || !rep.model || !rep.market) return null;
+  const mk = pct(rep.market.p_actual), md = pct(rep.model.p_actual), name = outcomeName(m, rep.outcome, true);
+  if (rep.verdict === "equal") return `Berabere: ikisi de ${name} aynı olasılığı verdi (${md}).`;
+  return rep.verdict === "model" ? `Model haklıydı: ${name} ${md} verdi, piyasa ${mk}.`
+    : `Piyasa haklıydı: ${name} ${mk} verdi, model ${md}.`;
+}
+function karneCard(m) {
+  const rep = m.report, i = OUT3.indexOf(rep.outcome);
+  const line = (lab, p) => h("div", { class: "krow" }, h("span", { class: "lbl" }, lab),
+    OUT3.map((o, k) => h("span", { class: k === i ? "kp act" : "kp" }, `${SHORT[o]} ${pct(p[k])}`, k === i ? h("small", {}, " ✓") : null)));
+  const sc = [];
+  if (rep.model_top) sc.push(`Modelin en olası skoru ${rep.model_top.score.replace("-", "–")} (${pct(rep.model_top.p)})`);
+  if (rep.actual_score_p != null) sc.push(`gerçek skor ${rep.score.replace("-", "–")}: ${pct(rep.actual_score_p)}`);
+  const v = verdictText(m, rep);
+  return sec("Karne", padCard(
+    h("div", { class: "khead" }, h("span", { class: "kscore" }, rep.score.replace("-", "–")),
+      h("span", { class: "kxg" }, rep.xg ? `xG ${fmtDec(rep.xg.home, 2)} – ${fmtDec(rep.xg.away, 2)}` : "xG yok"),
+      hitBadge(rep)),
+    rep.market ? line("Piyasa", rep.market.p) : null,
+    rep.model ? line("Model", rep.model.p) : h("p", { class: "bars-cap" }, "Bu maçta kendi model yoktu."),
+    h("p", { class: "kline" }, `Gerçekleşen sonuca (${outcomeName(m, rep.outcome)}): `,
+      rep.market ? `piyasa ${pct(rep.market.p_actual)}` : "", rep.model ? `, model ${pct(rep.model.p_actual)}` : "", "."),
+    sc.length ? h("p", { class: "kline" }, sc.join(" · "), ".") : null,
+    v ? h("p", { class: "kverdict" }, v) : null,
+    h("p", { class: "bars-cap" }, "Olasılıklar maç başlamadan önceki son tahmin. ✓ gerçekleşen sonuç.")));
 }
 
 /* Seçenek satırı: seçim, adil / yurtdışı oran, beklenen değer yazısı, kupona ekle, iddaa oranı kutusu.
@@ -613,6 +739,8 @@ function resultTab(m, render) {
           e ? badge(edgeText(e), "accent") : null),
         blendOn(m) && mk ? h("span", { class: "bars-cap" }, `Piyasa: ${r(mk)}`) : null))));
   }
+  if (m.sport === "football") out.push(oddsChart(m));
+  if (!nba && !minor && !m.expected) return out; // §32 geçmiş maç: donmuş 1X2 + oran grafiği; iddaa/kupon yok
   const h2h = m.options.filter((o) => o.market === "h2h");
   if (h2h.length) {
     let margin = null;
@@ -627,6 +755,38 @@ function resultTab(m, render) {
   if (dc.length) out.push(sec("Çifte şans", optionsCard(m, dc, render).el));
   out.push(explain(m));
   return out;
+}
+/* §31 MS piyasa olasılığının zaman içindeki değişimi: düz çizgiler piyasa (1/X/2 renkleri), kesikli yatay çizgiler model.
+   Renk tek başına anlam taşımasın diye sağ uçta "1 %48" etiketleri. Veri: m.odds_trend.points [[iso, p1, px, p2], ...]. */
+const TREND_COLORS = ["var(--home)", "var(--draw)", "var(--away)"];
+function oddsChart(m) {
+  const t = m.odds_trend;
+  if (!t || !t.points || t.points.length < 2) return sec("Oran hareketi", padCard(h("p", { class: "empty-sm" }, "Oran henüz değişmedi.")));
+  const pts = t.points, md = probs3(m, "model_prob");
+  const all = pts.flatMap((p) => p.slice(1)).concat(md || []);
+  const lo = Math.max(0, Math.floor((Math.min(...all) - 0.04) * 20) / 20), hi = Math.min(1, Math.ceil((Math.max(...all) + 0.04) * 20) / 20);
+  const t0 = Date.parse(pts[0][0]), t1 = Date.parse(pts[pts.length - 1][0]);
+  const L = 34, R = 268, T = 10, B = 120;
+  const X = (iso) => L + ((Date.parse(iso) - t0) / Math.max(1, t1 - t0)) * (R - L);
+  const Y = (v) => B - ((v - lo) / Math.max(0.01, hi - lo)) * (B - T);
+  const ticks = [lo, (lo + hi) / 2, hi];
+  const last = pts[pts.length - 1];
+  const labs = [0, 1, 2].map((i) => ({ i, y: Y(last[i + 1]) })).sort((a, b) => a.y - b.y);
+  for (let k = 1; k < labs.length; k++) labs[k].y = Math.max(labs[k].y, labs[k - 1].y + 13);
+  const first = pts[0];
+  const label = "Piyasa olasılığı, " + OUT3.map((o, i) => `${SHORT[o]} %${Math.round(first[i + 1] * 100)} → %${Math.round(last[i + 1] * 100)}`).join(", ")
+    + (md ? `. Model: ${OUT3.map((o, i) => `${SHORT[o]} %${Math.round(md[i] * 100)}`).join(", ")}` : "");
+  return sec("Oran hareketi", padCard(
+    svg("svg", { viewBox: "0 0 320 146", class: "trend", role: "img", "aria-label": label },
+      ticks.map((v) => [svg("line", { x1: L, x2: R, y1: Y(v), y2: Y(v), class: "grid" }),
+        svg("text", { x: L - 6, y: Y(v) + 4, class: "tick", "text-anchor": "end" }, Math.round(v * 100))]),
+      md ? md.map((v, i) => svg("line", { x1: L, x2: R, y1: Y(v), y2: Y(v), class: "model", style: `stroke:${TREND_COLORS[i]}` })) : null,
+      [0, 1, 2].map((i) => svg("polyline", { class: "line", style: `stroke:${TREND_COLORS[i]}`,
+        points: pts.map((p) => `${X(p[0]).toFixed(1)},${Y(p[i + 1]).toFixed(1)}`).join(" ") })),
+      labs.map(({ i, y }) => svg("text", { x: R + 6, y: y + 4, class: "lab" }, `${SHORT[OUT3[i]]} %${Math.round(last[i + 1] * 100)}`)),
+      svg("text", { x: L, y: 140, class: "tick" }, fmtDateTime(first[0])),
+      svg("text", { x: R, y: 140, class: "tick", "text-anchor": "end" }, fmtDateTime(last[0]))),
+    h("p", { class: "bars-cap" }, md ? "Düz çizgi piyasa, kesikli model." : "Piyasa olasılığı; kendi model bu maçta yok.")));
 }
 /* Çizgi seçici (alt/üst, handikap): çipler + seçilen çizginin seçenekleri. */
 function lineGroup(m, title, opts, render, keyOf, labelOf, preferred) {
@@ -1423,26 +1583,21 @@ function liveFootball(p) {
         : `Kanıt için en az ${inj.min_n} maçta farkın standart hatasından büyük olması gerekiyor; o zamana kadar olasılıklara katılmaz.`));
   }
   if (p.recent && p.recent.length) {
-    const OUT = ["home", "draw", "away"];
+    const WHO = { model: "Model haklı", market: "Piyasa haklı", equal: "Eşit" };
     out.push(sec("Son maçlar", card(
-      h("div", { class: "recent-row head row", "aria-hidden": "true" }, h("span", {}, "MAÇ"), h("span", { class: "c" }, "SKOR"),
-        ["1", "X", "2"].map((x) => h("span", { class: "c" }, x))),
-      p.recent.map((r) => {
-        const won = outcomeOf(r.score);
-        const fav = OUT.reduce((a, k) => (r[`p_${k}`] > r[`p_${a}`] ? k : a), "home");
-        return h("div", { class: "recent-row row" },
-          h("span", { class: "m" }, h("span", {}, `${r.home} – ${r.away}`), h("small", {}, fmtDate(r.kickoff))),
-          h("span", { class: "c sc" }, r.score),
-          OUT.map((k) => h("span", { class: k === won ? (k === fav ? "c hit" : "c act") : "c" },
-            pct(r[`p_${k}`]), k === won ? (k === fav ? " ✓" : " •") : "")));
-      })),
-    h("p", { class: "sec-note" }, "✓ favori dediğimiz sonuç oldu. • gerçekleşen sonuç (favori değildi).")));
+      h("div", { class: "recent-row kr head row", "aria-hidden": "true" }, h("span", {}, "MAÇ"), h("span", { class: "c" }, "SKOR"),
+        h("span", { class: "c" }, "MODEL"), h("span", { class: "c" }, "KİM")),
+      p.recent.map((r) => h("div", { class: "recent-row kr row", role: "group", "aria-label": `${r.home} – ${r.away} ${r.score}. `
+          + (r.model_hit == null ? "Model yok." : `Model ${r.model_hit ? "bildi" : "bilemedi"}.`)
+          + (r.verdict ? ` ${WHO[r.verdict]}: gerçekleşen sonuca model ${pct(r.p_actual_model)}, piyasa ${pct(r.p_actual_market)}.` : "") },
+        h("span", { class: "m", "aria-hidden": "true" }, h("span", {}, `${r.home} – ${r.away}`), h("small", {}, fmtDate(r.kickoff))),
+        h("span", { class: "c sc", "aria-hidden": "true" }, r.score),
+        h("span", { class: "c", "aria-hidden": "true" }, r.model_hit == null ? "–" : hitBadge(r, true)),
+        h("span", { class: "c who", "aria-hidden": "true" }, r.verdict ? WHO[r.verdict] : "–",
+          r.verdict ? h("small", {}, `${pct(r.p_actual_model)} / ${pct(r.p_actual_market)}`) : null)))),
+    h("p", { class: "sec-note" }, "Model ✓: modelin en yüksek olasılık verdiği sonuç oldu. Kim: gerçekleşen sonuca daha yüksek olasılık veren (log loss); altında model / piyasa.")));
   }
   return out;
-}
-function outcomeOf(score) {
-  const [a, b] = score.split("-").map(Number);
-  return a > b ? "home" : a < b ? "away" : "draw";
 }
 /* Brier çubukları: eksen 0'dan değil, yazılı bir değerden başlar (farklar görünür olsun). */
 function brierBars(rows) {
@@ -1591,6 +1746,7 @@ function resolveRoute(hash) {
   if (path === "#/gecmis") return { view: "history", tab: "gecmis" };
   if (path.startsWith("#/gecmis/")) return { view: "historyDetail", tab: "gecmis", id: dec(path.slice(9)) };
   if (path === "#/performans") return { view: "performance", tab: "performans" };
+  if (path.startsWith("#/lig/")) return { view: "league", tab: "bugun", id: dec(path.slice(6)) };
   if (path.startsWith("#/maclar/")) return { redirect: "#/" };
   return { redirect: "#/" };
 }
@@ -1626,6 +1782,7 @@ function route() {
     viewMatch(root, r.id, r.from);
   }
   else if (r.view === "today") viewToday(root);
+  else if (r.view === "league") viewLeague(root, r.id);
   else if (r.view === "kupon") viewKupon(root);
   else if (r.view === "suggest") viewSuggest(root);
   else if (r.view === "performance") viewPerformance(root);
