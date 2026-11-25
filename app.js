@@ -7,7 +7,9 @@
 const TZ = "Europe/Istanbul";
 const STORE = "macanaliz.kupon.v1";
 const HSTORE = "macanaliz.gecmis.v1"; // §27 oynanan kuponlar + aylık bütçe
-const ISTORE = "macanaliz.iddaa.v1"; // §29 elle girilen iddaa oranları (maç detayı, Kuponum, Oynadım ortak)
+const ISTORE = "macanaliz.iddaa.v1"; // §29 elle girilen iddaa oranları (maç detayı, Kuponum, Oynadım ortak); §34 otomatik de
+const OTO_STORE = "macanaliz.iddaa.oto.v1"; // §34 "0" = otomatik çekme kapalı (varsayılan açık)
+const DURUM_STORE = "macanaliz.iddaa.durum.v1"; // §34 son çekim durumu (spor başına)
 const KINDS = [
   ["safe", History.TYPE_NAMES.safe, "Tutma olasılığı görece yüksek, oranı düşük. Hiçbir kupon garanti değildir."],
   ["risky", "Riskli", "Risk almayan viski içemez."],
@@ -232,7 +234,7 @@ const inKupon = (key) => state.kupon.some((l) => l.key === key);
 function legFrom(m, o, src) {
   const fair = o.price == null; // oranı çekilmeyen lig: adil oranla girer, kullanıcı iddaa oranını yazar
   return { key: o.key, matchId: m.id, pick: o.pick, match: matchLabel(m), competition: m.competition,
-    kickoff: m.kickoff, price: fair ? o.fair : o.price, prob: o.prob, fair, src, model: isMinor(m) }; // src: safe|risky|slip|own
+    kickoff: m.kickoff, price: fair ? o.fair : o.price, prob: o.prob, fair, src, model: isMinor(m) || !!o.unverified }; // src: safe|risky|slip|own
 }
 function toggleOption(m, o) {
   if (inKupon(o.key)) {
@@ -299,6 +301,103 @@ function migrateKuponOdds() {
   if (n) saveKupon();
 }
 const bandPct = () => Math.round(Iddaa.EV_BANDS.value * 100);
+/* ---------- §34 iddaa oranlarını tarayıcıda çekme ----------
+   Açılışta ve sekmeye dönüşte, spor başına en fazla 2 saatte bir (Bulletin.due). Ham yanıt saklanmaz; eşleşen seçeneklerin
+   oranı iddaa kaydına "auto" olarak yazılır (elle girilen her zaman önce). Hata sessiz: sadece Ayarlar'daki durumda görünür. */
+const IDDAA_TIMEOUT_MS = 10000;
+function iddaaAutoOn() {
+  try { return localStorage.getItem(OTO_STORE) !== "0"; } catch { return true; }
+}
+function setIddaaAutoOn(on) {
+  try { if (on) localStorage.removeItem(OTO_STORE); else localStorage.setItem(OTO_STORE, "0"); } catch { /* kayıt alanı kapalı */ }
+  if (!on) { // kapatınca çekilmiş oranlar da kalkar; elle girilenler kalır
+    for (const id of Object.keys(state.iddaa.matches)) Iddaa.setAuto(state.iddaa, id, state.iddaa.matches[id].kickoff, {}, "");
+    persistIddaa(state.iddaa);
+    refreshSide();
+  }
+}
+function loadIddaaStatus() {
+  try { const v = JSON.parse(localStorage.getItem(DURUM_STORE)); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+}
+function saveIddaaStatus(st) {
+  try { localStorage.setItem(DURUM_STORE, JSON.stringify(st)); } catch { /* yok sayılır */ }
+}
+const feedError = (e) => (e && e.name === "AbortError" ? "Zaman aşımı" : e instanceof TypeError ? "Ağ ya da erişim (CORS) hatası"
+  : e instanceof SyntaxError ? "Biçim değişti" : String((e && e.message) || e));
+let feedBusy = false;
+async function fetchSport(sport, st) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), IDDAA_TIMEOUT_MS);
+  let res;
+  try { res = await fetch(Bulletin.url(sport), { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", signal: ctrl.signal }); } finally { clearTimeout(timer); }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const r = Bulletin.parse(await res.json(), Date.now());
+  if (!r.ok) throw new Error("Biçim değişti");
+  const ours = (DATA[sport] || []).flatMap((d) => d.matches).filter((m) => !started(m));
+  const mt = Bulletin.match(r.events, ours, DATA.iddaa_map, sport);
+  const c = Bulletin.collect(mt.pairs, sport);
+  if (!c.ok) throw new Error("Biçim değişti"); // eski otomatik oranlara dokunulmaz
+  if (!iddaaAutoOn()) return false; // çekme sürerken kapatıldı: oranları geri yazma
+  const at = new Date().toISOString();
+  const { nOdds, unknown } = c;
+  for (const { match, odds } of c.perMatch) Iddaa.setAuto(state.iddaa, match.id, match.kickoff, odds, at);
+  // bültende artık olmayan (askıya alınan, kaldırılan) maçların eski otomatik oranı kalkar; elle girilenler kalır
+  const paired = new Set(c.perMatch.map((x) => x.match.id));
+  for (const m of ours) if (!paired.has(m.id) && Iddaa.autoKeys(state.iddaa, m.id).length) Iddaa.setAuto(state.iddaa, m.id, m.kickoff, {}, at);
+  if (mt.log.teams.length || mt.log.matches.length) console.info(`iddaa eşleşmeyenler (${sport})`, mt.log);
+  if (r.skipped.length) console.info(`iddaa: ayrıştırılamayan ${r.skipped.length} maç atlandı (${sport})`, r.skipped);
+  Object.assign(st, { lastOk: at, error: null, errorAt: null, matched: mt.pairs.length, odds: nOdds, unknown, skipped: r.skipped.length,
+    nTeams: mt.log.teams.length, teams: mt.log.teams.slice(0, 20).map((t) => t.name),
+    nMatches: mt.log.matches.length, matches: mt.log.matches.slice(0, 20).map((x) => `${x.home} – ${x.away}`) });
+  return true; // kayıt değişmiş olabilir (yeni oranlar ya da bültenden düşenler)
+}
+async function refreshIddaaFeed(force = false) {
+  if (feedBusy || !DATA || !DATA.iddaa_map || !iddaaAutoOn()) return;
+  feedBusy = true;
+  let changed = false;
+  try {
+    const status = loadIddaaStatus();
+    for (const sport of ["football", "basketball"]) {
+      if (!force && !Bulletin.due(status, sport, Date.now())) continue;
+      const st = (status[sport] = { ...(status[sport] || {}), lastTry: new Date().toISOString() });
+      saveIddaaStatus(status); // deneme zamanı önce: hata olsa da 2 saat beklenir
+      try { changed = (await fetchSport(sport, st)) || changed; } catch (e) { st.error = feedError(e); st.errorAt = new Date().toISOString(); }
+      saveIddaaStatus(status);
+    }
+  } finally { feedBusy = false; }
+  if (changed && iddaaAutoOn()) { persistIddaa(state.iddaa); refreshSide(); }
+  const typing = document.activeElement && document.activeElement.tagName === "INPUT";
+  if ((changed || location.hash.startsWith("#/gecmis")) && !typing) route(); // yazarken yeniden çizip kutuyu bozma
+}
+/* Geçmiş > Ayarlar: otomatik çekme anahtarı, son başarılı çekim, hata, eşleşmeyenler. */
+function iddaaFeedSection(render) {
+  const on = iddaaAutoOn(), st = loadIddaaStatus();
+  const sportLine = (sport, name) => {
+    const x = st[sport] || {};
+    return h("div", { class: "feed-st row" }, h("b", {}, name),
+      h("span", {}, x.lastOk ? `Son başarılı çekim: ${fmtDateTime(x.lastOk)} · ${x.matched || 0} maç, ${x.odds || 0} oran` : "Henüz başarılı çekim yok"),
+      x.skipped ? h("span", { class: "muted" }, `Bültende ayrıştırılamayan ${x.skipped} maç atlandı`) : null,
+      x.error ? h("span", { class: "bad" }, `Son hata: ${x.error}${x.errorAt ? ` (${fmtDateTime(x.errorAt)})` : ""}`) : null,
+      (x.nTeams || x.nMatches) ? h("details", { class: "more" },
+        h("summary", {}, `Eşleşmeyen: ${x.nTeams || 0} takım, ${x.nMatches || 0} maç`),
+        x.teams && x.teams.length ? h("p", { class: "opt-sub" }, "Takım: ", x.teams.join(", ")) : null,
+        x.matches && x.matches.length ? h("p", { class: "opt-sub" }, "Maç: ", x.matches.join(", ")) : null) : null);
+  };
+  return sec("iddaa oranları",
+    card(
+      h("div", { class: "set-row row" }, h("span", {}, "iddaa oranlarını otomatik çek"),
+        segmented("iddaa oranlarını otomatik çek", [["on", "Açık"], ["off", "Kapalı"]], on ? "on" : "off",
+          (v) => { setIddaaAutoOn(v === "on"); if (v === "on") refreshIddaaFeed(true).then(render); render(); }, "sm")),
+      on ? [sportLine("football", "Futbol"), sportLine("basketball", "NBA"),
+        h("button", { type: "button", class: "link-btn row", disabled: feedBusy, onclick: async (ev) => {
+          ev.currentTarget.disabled = true;
+          await refreshIddaaFeed(true);
+          render();
+        } }, "Şimdi çek")] : null),
+    h("p", { class: "sec-note" }, "Oranlar iddaa'dan bu cihaza çekilir; Maç Analiz sunucusuna ya da siteye gönderilmez. ",
+      "Elle girdiğin oran her zaman önce gelir. Açıkken uygulama açılışta en fazla 2 saatte bir çeker; çekilemezse elle girişe dönülür."));
+}
+
 /* ---------- kupon geçmişi (localStorage, §27) ---------- */
 function loadHistory() {
   let raw = null;
@@ -664,16 +763,20 @@ function evText(ev, model) {
   if (!lab) return null;
   return { band: lab.band, text: model ? `${cap1(Iddaa.MODEL_LABEL)} · ${Iddaa.formatPct(ev)}` : `${cap1(Iddaa.BAND_NAMES[lab.band])} · ${Iddaa.formatPct(ev)}` };
 }
-/* iddaa oranı kutusu + beklenen değer yazısı (maç detayı ve Değerli ortak). minor: doğrulanmamış model → renk yok. */
+/* iddaa oranı kutusu + beklenen değer yazısı (maç detayı ve Değerli ortak). minor: doğrulanmamış model → renk yok.
+   Kutudaki oran: elle girilen, yoksa otomatik çekilen (§34). Altında "gereken %X · tahmin %Y · elle|iddaa". */
 function iddaaField(m, o, minor, onLive) {
-  const saved = iddaaOf(m.id, o.key);
+  const effective = () => iddaaOf(m.id, o.key);
   const evEl = h("span", { class: "opt-ev", "aria-live": "polite" });
+  const reqEl = h("span", { class: "opt-req" });
+  const wrap = h("span", { class: "opt-evs" }, evEl, reqEl);
   let input = null;
   const show = (text) => { // → oran | null (boş) | undefined (geçersiz)
     const t = String(text).trim();
     input.removeAttribute("aria-invalid");
     input.classList.remove("good");
     evEl.className = "opt-ev";
+    reqEl.replaceChildren();
     if (!t) { evEl.replaceChildren(); return null; }
     const v = Iddaa.parseOdds(t);
     if (v == null) {
@@ -688,30 +791,38 @@ function iddaaField(m, o, minor, onLive) {
       if (lab.band === "value") input.classList.add("good");
       evEl.replaceChildren(lab.text);
     } else evEl.replaceChildren();
+    const man = Iddaa.manual(state.iddaa, m.id, o.key), auto = Iddaa.autoOdds(state.iddaa, m.id, o.key);
+    const tag = man == null && auto != null && v === auto ? "iddaa" : "elle";
+    reqEl.replaceChildren(`gereken ${pct(Iddaa.required(v))} · tahmin ${pct(o.prob)}${minor ? " (doğrulanmamış)" : ""} · `,
+      h("span", { class: `src ${tag === "iddaa" ? "auto" : "man"}` }, tag));
     return v;
   };
+  const saved = effective();
   input = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", class: "inp", placeholder: "iddaa",
     value: saved == null ? "" : odds(saved),
     oninput: (ev) => { show(ev.target.value); if (onLive) onLive(); },
     onchange: (ev) => {
       const v = show(ev.target.value);
       if (v === undefined) { toast("Oran 1'den büyük bir sayı olmalı (1,85 ya da 1.85)"); return; }
-      setIddaa(m.id, m.kickoff, o.key, v);
-      if (v != null) ev.target.value = odds(v);
+      setIddaa(m.id, m.kickoff, o.key, v); // boş → elle oran silinir; otomatik oran varsa geri gelir
+      const now = effective();
+      ev.target.value = now == null ? "" : odds(now);
+      show(ev.target.value);
       if (onLive) onLive();
     } });
   show(input.value);
-  return { input, evEl };
+  return { input, evEl: wrap };
 }
 function optRow(m, o, render, opts) {
   const { big, onLive } = opts || {};
-  const minor = isMinor(m);
+  const minor = isMinor(m) || !!o.unverified; // §34 NBA'de Odds API'de olmayan iddaa çizgisi: sadece model, piyasa yok
   const { input, evEl } = iddaaField(m, o, minor, onLive);
   const d = diffOf(o);
   const flag = !minor && !big && d != null && Math.abs(d) >= EDGE;
   const blendDiff = !minor && o.market === "h2h" && blendOn(m) && o.market_prob != null && Math.abs(o.prob - o.market_prob) > 0.0005;
   // MS'de olasılık yukarıdaki büyük rakamlarda; diğer pazarlarda satırda yazılır
-  const sub = minor ? `Model ${pct(o.prob)} · Adil ${odds(o.fair)}`
+  const sub = o.unverified ? `Model ${pct(o.prob)} · piyasa yok · Adil ${odds(o.fair)}`
+    : minor ? `Model ${pct(o.prob)} · Adil ${odds(o.fair)}`
     : `${big ? "" : `${blendDiff ? `Harman ${pct(o.prob)}` : pct(o.prob)}${o.model_prob != null ? ` (model ${pct(o.model_prob)})` : ""} · `}Adil ${odds(o.fair)} · Yurtdışı ${o.price ? odds(o.price) : "–"}`;
   const can = o.addable || minor;
   const inK = inKupon(o.key);
@@ -749,6 +860,13 @@ function marginLine(m, rows) {
   };
   update();
   return { el, update };
+}
+/* Maçın seçenekleri + iddaa kaydında oranı olan ek seçenekler (§34: futbol 3 yollu handikap, NBA'de Odds API dışı çizgi). */
+function optsOf(m) {
+  if (!m.lines) return m.options;
+  const rec = state.iddaa.matches[m.id];
+  const keys = rec ? [...new Set([...Object.keys(rec.odds), ...Iddaa.autoKeys(state.iddaa, m.id)])] : [];
+  return keys.length ? m.options.concat(Bulletin.extraOptions(m, keys)) : m.options;
 }
 function optionsCard(m, opts, render, big) {
   const rows = opts.map((o) => optRow(m, o, render, { big: big ? (m.sport === "basketball" ? SHORT[o.outcome] : SHORT[o.outcome]) : null }));
@@ -788,10 +906,12 @@ function resultTab(m, render) {
     out.push(sec("İddaa oranların", card(rows.map((r) => r.el), margin.el),
       h("p", { class: "sec-note" }, "iddaa'da gördüğün oranı kutuya yaz: beklenen değer = olasılık × oran − 1. ",
         minor ? "Bu ligde model doğrulanmamış; renk verilmez." : `+%${bandPct()} üstü değerli, −%${bandPct()} altı düşük, arası adil.`,
-        " Oran bu cihazda kalır, Kuponum'a da geçer.")));
+        " Oran bu cihazda kalır, Kuponum'a da geçer. Otomatik çekilen oranın altında “iddaa”, senin yazdığında “elle” yazar.")));
   }
   const dc = m.options.filter((o) => o.market === "double_chance");
   if (dc.length) out.push(sec("Çifte şans", optionsCard(m, dc, render).el));
+  const hc = optsOf(m).filter((o) => o.market === "handicap3"); // §34 sadece iddaa'da çizgisi varsa
+  if (hc.length) out.push(lineGroup(m, "Handikaplı MS", hc, render, (o) => o.line, hcapLabel, -1));
   out.push(explain(m));
   return out;
 }
@@ -840,6 +960,7 @@ function lineGroup(m, title, opts, render, keyOf, labelOf, preferred) {
       h("button", { type: "button", class: "chip", "aria-pressed": l === cur, onclick: () => { store[title] = l; render(); } }, labelOf(l)))) : null,
     optionsCard(m, shown, render).el);
 }
+const hcapLabel = (l) => (l > 0 ? `${l}:0` : `0:${-l}`);
 function goalsTab(m, render) {
   const minor = isMinor(m);
   const out = [];
@@ -864,11 +985,12 @@ function pointsTab(m, render) {
   out.push(sec("Beklenen", h("div", { class: "card pad" }, h("div", { class: "tiles" },
     tile("Ev sahibi farkı", e.margin == null ? "–" : signedC(e.margin), me ? signedC(me.margin) : null),
     tile("Toplam sayı", e.total == null ? "–" : fmtDec(e.total), me ? fmtDec(me.total) : null)))));
-  const sp = m.options.filter((o) => o.market === "spreads");
+  const sp = optsOf(m).filter((o) => o.market === "spreads");
   out.push(lineGroup(m, "Handikap", sp, render, (o) => Math.abs(o.line), fmtLine, Math.abs(e.margin || 0)));
-  const tot = m.options.filter((o) => o.market === "totals");
+  const tot = optsOf(m).filter((o) => o.market === "totals");
   out.push(lineGroup(m, "Alt / üst", tot, render, (o) => o.line, fmtLine, e.total || 0));
-  out.push(h("p", { class: "foot" }, "Handikap ve alt/üst olasılıkları piyasadan; uzatmalar dahil."));
+  out.push(h("p", { class: "foot" }, "Handikap ve alt/üst olasılıkları piyasadan; uzatmalar dahil. ",
+    "iddaa'nın farklı çizgileri kendi modelden (piyasa yok, doğrulanmamış)."));
   return out;
 }
 /* Takımlar sekmesi. */
@@ -1130,6 +1252,7 @@ function budgetSection(extra) {
       : h("span", { class: "opt-sub" }, `Kalan ${tl(withK.left)}.`)));
 }
 const fmtMoney = (x) => new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 2 }).format(x);
+const DEP_TEXT = "Bu seçimler birbirine bağlı, birlikte oynamak riski çeşitlendirmez.";
 function viewKupon(root) {
   const render = () => { const y = window.scrollY; viewKupon(root); window.scrollTo(0, y); };
   const legs = state.kupon;
@@ -1150,9 +1273,7 @@ function viewKupon(root) {
   const totalEV = Iddaa.couponEV(legs.map((l) => ({ prob: l.prob, price: legPrice(l) })));
   const unverified = legs.filter((l) => !legVerified(l)).length;
   const anyModel = legs.some(legModel);
-  const counts = {};
-  legs.forEach((l) => { counts[l.matchId] = (counts[l.matchId] || 0) + 1; });
-  const dup = [...new Set(legs.filter((l) => counts[l.matchId] > 1).map((l) => l.match))];
+  const dep = Iddaa.dependentLegs(legs); // §34 aynı maçtan seçimler: birbirine bağlı
   const late = [...new Set(legs.filter((l) => new Date(l.kickoff) <= new Date()).map((l) => l.match))];
 
   const kleft = [], kright = [];
@@ -1177,8 +1298,11 @@ function viewKupon(root) {
           } })),
       h("button", { type: "button", class: "rm", "aria-label": `${l.pick} seçimini kaldır`,
         onclick: () => { state.kupon = state.kupon.filter((x) => x.key !== l.key); saveKupon(); render(); } }, removeIcon()));
-  })), h("p", { class: "sec-note" }, "Oranlar iddaa'da gördüğün değerler; maç detayıyla ortak. Kutuyu boşaltırsan seçimin eklendiği orana döner.")));
-  if (dup.length) kleft.push(h("p", { class: "alert warn" }, h("b", {}, "Aynı maçtan birden fazla seçim: "), `${dup.join(", ")}. Bahis siteleri kabul etmeyebilir.`));
+  })), h("p", { class: "sec-note" }, "Oranlar iddaa'da gördüğün değerler; maç detayıyla ortak. Kutuyu boşaltırsan otomatik çekilen iddaa oranına, o da yoksa seçimin eklendiği orana döner.")));
+  if (dep.length) kleft.push(h("div", { class: "alert warn", role: "status" },
+    h("p", {}, h("b", {}, DEP_TEXT)),
+    h("ul", { class: "dep-list" }, dep.map((g) => h("li", {}, `${legs[g[0]].match}: ${g.map((i) => legs[i].pick).join(" + ")}`))),
+    h("p", {}, "Bahis siteleri aynı maçtan birden fazla seçimi kabul etmeyebilir.")));
   if (late.length) kleft.push(h("p", { class: "alert warn" }, h("b", {}, "Başlamış maç: "), late.join(", ")));
 
   const evLab = totalEV == null ? null : evText(totalEV, anyModel);
@@ -1190,7 +1314,8 @@ function viewKupon(root) {
       h("div", {}, h("small", {}, "Toplam oran"), h("span", { class: "num" }, odds(total))),
       h("div", {}, h("small", {}, "Tutma ihtimali"), h("span", { class: "num" }, totalProb == null ? "–" : `%${fmtDec(totalProb * 100)}`)),
       h("div", {}, h("small", {}, "Beklenen değer"), h("span", { class: `num ${evCls}` }, totalEV == null ? "–" : Iddaa.formatPct(totalEV)),
-        evLab ? h("small", { class: evCls || null }, anyModel ? Iddaa.MODEL_LABEL : Iddaa.BAND_NAMES[evLab.band]) : null)),
+        dep.length ? h("small", {}, "seçimler bağımsız sayıldı")
+          : evLab ? h("small", { class: evCls || null }, anyModel ? Iddaa.MODEL_LABEL : Iddaa.BAND_NAMES[evLab.band]) : null)),
     unverified ? h("p", { class: "opt-sub" }, `${unverified} seçimde iddaa oranı yok; toplam oran ve beklenen değer o seçimlerde yurtdışı ya da adil oranla hesaplandı.`) : null,
     h("p", { class: "opt-sub" }, "Tutma ihtimali ve beklenen değer (Π olasılık × Π oran − 1) maçların bağımsız olduğu varsayımıyla."),
     h("div", { class: "hr" }),
@@ -1206,6 +1331,7 @@ function viewKupon(root) {
     h("div", { class: "line-kv" }, h("span", {}, "Olası kazanç"), payout),
     h("button", { type: "button", class: state.playing ? "btn block" : "btn primary block", "aria-expanded": state.playing,
       onclick: () => { state.playing = !state.playing; state.playDraft = null; render(); } }, state.playing ? "Vazgeç" : "Oynadım"),
+    state.playing && dep.length ? h("p", { class: "alert warn" }, DEP_TEXT) : null,
     state.playing ? playForm(legs, render) : null,
     h("div", { class: "btn-row" },
       h("a", { class: "btn sm", href: shareLink(legs, total, totalProb), target: "_blank", rel: "noopener" }, "WhatsApp'ta paylaş"),
@@ -1478,6 +1604,7 @@ function viewHistory(root) {
     kids.push(twoCol(hleft, [sec("Kuponlar", card(shown.map(couponRow)),
       unv ? h("p", { class: "sec-note" }, `${unv} kupon iddaa oranı girilmeden kaydedildi ("Oran doğrulanmadı"); kazançları gerçek iddaa oranıyla farklı olabilir.`) : null)]));
   }
+  kids.push(iddaaFeedSection(render));
   kids.push(settingsSection(render));
   kids.push(h("p", { class: "foot" }, "Sonuçlar maç bittikten sonraki sabah güncellemesiyle gelir (son 7 gün). Ertelenen, iptal edilen ",
     "ya da uzatmaya giden maçlar ve LFA'da olmayan maçlar (NBA, Konferans Ligi, milli maçlar) elle sonuçlandırılır."));
@@ -1924,6 +2051,8 @@ async function init() {
   window.addEventListener("hashchange", route);
   WIDE.addEventListener("change", route); // 1023 ↔ 1024 px: sayfa yenilenmeden düzen değişir
   route();
+  refreshIddaaFeed(); // §34 beklemeden; en fazla 2 saatte bir
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshIddaaFeed(); });
 }
 
 /* ---------- PWA: bağlantı bandı ve service worker güncellemesi ---------- */

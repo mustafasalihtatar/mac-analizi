@@ -66,7 +66,24 @@ const Iddaa = (() => {
     return legs.reduce((a, l) => a * l.prob, 1) * legs.reduce((a, l) => a * l.price, 1) - 1;
   }
 
-  /* ---------- kayıt: {version, matches: {maçId: {kickoff, odds: {seçenekAnahtarı: oran}}}} ---------- */
+  /* Kupondaki bağımlı seçimler: aynı maçı paylaşan (≥ 2) seçimlerin indeks grupları, ilk görünüş sırasıyla. couponEV
+     bağımsızlık varsayar; bu gruplar varsa kupon riski çeşitlendirmez (§34). */
+  function dependentLegs(legs) {
+    if (!Array.isArray(legs)) return [];
+    const groups = new Map();
+    legs.forEach((l, i) => {
+      const id = l && l.matchId;
+      if (id == null) return;
+      if (!groups.has(id)) groups.set(id, []);
+      groups.get(id).push(i);
+    });
+    return [...groups.values()].filter((g) => g.length >= 2);
+  }
+  /* Gereken olasılık: oranın başa baş noktası, 1 / oran (§34). */
+  const required = (o) => (validOdds(o) ? 1 / o : null);
+
+  /* ---------- kayıt: {version, matches: {maçId: {kickoff, odds: {anahtar: oran}, auto?: {anahtar: oran}, autoAt?}}}
+     odds = elle girilen, auto = iddaa'dan otomatik çekilen (§34). Okurken elle girilen her zaman önce gelir. ---------- */
   const emptyStore = () => ({ version: VERSION, matches: {} });
   /* Metin → kayıt. Hiç hata fırlatmaz: bozuk metin boş kayıt, geçersiz girdiler tek tek atılır. */
   function parseStore(text) {
@@ -76,9 +93,12 @@ const Iddaa = (() => {
     if (!o || typeof o !== "object" || o.version !== VERSION || !o.matches || typeof o.matches !== "object") return s;
     for (const [id, m] of Object.entries(o.matches)) {
       if (!m || typeof m !== "object" || isNaN(new Date(m.kickoff)) || !m.odds || typeof m.odds !== "object") continue;
-      const odds = {};
+      const odds = {}, auto = {};
       for (const [k, v] of Object.entries(m.odds)) if (typeof k === "string" && validOdds(v)) odds[k] = v;
-      if (Object.keys(odds).length) s.matches[id] = { kickoff: String(m.kickoff), odds };
+      if (m.auto && typeof m.auto === "object") for (const [k, v] of Object.entries(m.auto)) if (validOdds(v)) auto[k] = v;
+      const rec = { kickoff: String(m.kickoff), odds };
+      if (Object.keys(auto).length) { rec.auto = auto; rec.autoAt = isNaN(new Date(m.autoAt)) ? null : String(m.autoAt); }
+      if (Object.keys(odds).length || rec.auto) s.matches[id] = rec;
     }
     return s;
   }
@@ -92,9 +112,32 @@ const Iddaa = (() => {
     }
     return n;
   }
-  function get(store, matchId, key) {
+  const has = (m) => Object.keys(m.odds).length || (m.auto && Object.keys(m.auto).length);
+  function manual(store, matchId, key) {
     const m = store.matches[matchId];
     return m && validOdds(m.odds[key]) ? m.odds[key] : null;
+  }
+  const autoOf = (store, matchId, key) => {
+    const m = store.matches[matchId];
+    return m && m.auto && validOdds(m.auto[key]) ? m.auto[key] : null;
+  };
+  /* Etkin oran: elle girilen, yoksa otomatik çekilen. */
+  const get = (store, matchId, key) => manual(store, matchId, key) ?? autoOf(store, matchId, key);
+  const source = (store, matchId, key) => (manual(store, matchId, key) != null ? "elle" : autoOf(store, matchId, key) != null ? "iddaa" : null);
+  function autoKeys(store, matchId) {
+    const m = store.matches[matchId];
+    return m && m.auto ? Object.keys(m.auto) : [];
+  }
+  /* Maçın otomatik oranlarını tümüyle değiştirir (elle girilenlere dokunmaz). Boş harita otomatik oranları siler. */
+  function setAuto(store, matchId, kickoff, odds, atIso) {
+    if (isNaN(new Date(kickoff))) return false;
+    const auto = {};
+    for (const [k, v] of Object.entries(odds || {})) if (validOdds(v)) auto[k] = round2(v);
+    const m = store.matches[matchId] || (store.matches[matchId] = { kickoff: String(kickoff), odds: {} });
+    m.kickoff = String(kickoff);
+    if (Object.keys(auto).length) { m.auto = auto; m.autoAt = String(atIso); } else { delete m.auto; delete m.autoAt; }
+    if (!has(m)) delete store.matches[matchId];
+    return true;
   }
   /* price null → o seçeneğin oranı silinir (maçın son oranıysa maç da). Geçersiz oran yazılmaz: false döner. */
   function set(store, matchId, kickoff, key, price) {
@@ -102,7 +145,7 @@ const Iddaa = (() => {
       const m = store.matches[matchId];
       if (!m) return true;
       delete m.odds[key];
-      if (!Object.keys(m.odds).length) delete store.matches[matchId];
+      if (!has(m)) delete store.matches[matchId];
       return true;
     }
     if (!validOdds(price) || isNaN(new Date(kickoff))) return false;
@@ -113,7 +156,7 @@ const Iddaa = (() => {
   }
 
   return { EV_BANDS, BAND_NAMES, KEEP_MS, parseOdds, expectedValue, evBand, evLabel, MODEL_LABEL, formatPct, margin, couponEV,
-    emptyStore, parseStore, serialize, prune, get, set };
+    emptyStore, parseStore, serialize, prune, get, set, manual, autoOdds: autoOf, source, autoKeys, setAuto, required, dependentLegs };
 })();
 
 if (typeof module !== "undefined") module.exports = Iddaa;

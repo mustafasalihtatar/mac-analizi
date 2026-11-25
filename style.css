@@ -335,6 +335,16 @@ details.more p { line-height: 1.45; margin-bottom: 8px; }
 .opt-ev:empty { display: none; }
 .opt-ev.good { color: var(--good); }
 .opt-ev.bad { color: var(--bad); }
+/* §34 iddaa: "gereken %X · tahmin %Y · elle|iddaa" ve Ayarlar'daki çekim durumu */
+.opt-evs { display: flex; flex-direction: column; gap: 2px; }
+.opt-req { font-size: 12px; color: var(--muted); }
+.opt-req:empty { display: none; }
+.opt-req .src { font-weight: 600; }
+.opt-req .src.auto { color: var(--link); }
+.feed-st { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; font-size: 13px; }
+.feed-st .bad { color: var(--bad); }
+.dep-list { margin: 4px 0; padding-left: 18px; }
+.sb-dep { margin: 0; padding: 8px 14px; font-size: 12px; }
 .opt-add { display: flex; gap: 8px; align-items: center; }
 .add-btn { min-height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: var(--text);
   font: 600 13px var(--body); display: inline-flex; align-items: center; gap: 6px; position: relative; }

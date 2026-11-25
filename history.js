@@ -68,6 +68,12 @@ const History = (() => {
         if (d === null) return null;
         return d === 0 ? "void" : res(d > 0);
       }
+      case "handicap3": { // §34 3 yollu (Avrupa) handikap: çizgi ev skoruna eklenir, iade yok
+        if (k.line == null) return null;
+        const d = h + k.line - a;
+        const r = d > 0 ? "home" : d < 0 ? "away" : "draw";
+        return ["home", "draw", "away"].includes(k.outcome) ? res(r === k.outcome) : null;
+      }
       default: return null;
     }
   }

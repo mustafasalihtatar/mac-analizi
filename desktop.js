@@ -54,6 +54,7 @@ const Desktop = (() => {
         h("div", { class: "sb-leg-info" }, h("span", { class: "sb-pick" }, l.pick), h("small", {}, l.match)),
         h("span", { class: "sb-odds" }, odds(legPrice(l))))),
       h("div", { class: "sb-total row" }, h("span", {}, "Toplam oran"), h("b", { class: "num" }, odds(total))),
+      Iddaa.dependentLegs(legs).length ? h("p", { class: "sb-dep muted" }, "Aynı maçtan seçimler var: birbirine bağlı.") : null,
       h("div", { class: "sb-open" }, h("a", { class: "btn primary block", href: "#/kupon" }, "Kuponu aç"))));
   }
   function footer() {
