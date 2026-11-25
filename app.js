@@ -173,6 +173,9 @@ function sec(title, ...kids) {
   return h("section", { class: "sec" }, title ? h("h2", { class: "sec-h" }, title) : null, ...kids);
 }
 const card = (...kids) => h("div", { class: "card" }, ...kids);
+/* Masaüstünde iki sütun (≥ 1024 px, yeterli genişlikte); mobilde display: contents — DOM sırası ve görünüm aynı kalır. */
+const twoCol = (left, right) => h("div", { class: "pgrid" },
+  h("div", { class: "pcol" }, left.filter(Boolean)), h("div", { class: "pcol" }, right.filter(Boolean)));
 const padCard = (...kids) => h("div", { class: "card pad" }, ...kids);
 const badge = (text, kind, extra) => h("span", { class: `badge${kind ? ` ${kind}` : ""}${extra ? ` ${extra}` : ""}` }, text);
 /* Segmentli seçici (role=tablist). items: [[değer, etiket]]. */
@@ -219,6 +222,11 @@ function saveKupon() {
   b.textContent = n;
   b.setAttribute("aria-label", `${n} seçim`);
   b.hidden = n === 0;
+  refreshSide();
+}
+/* Masaüstü kenar çubuğu (kupon özeti, Değerli sayısı) kupon / iddaa değişince yenilenir; mobilde bir şey yapmaz. */
+function refreshSide() {
+  if (WIDE.matches) Desktop.renderSide(document.getElementById("side"));
 }
 const inKupon = (key) => state.kupon.some((l) => l.key === key);
 function legFrom(m, o, src) {
@@ -273,6 +281,7 @@ function setIddaa(matchId, kickoff, key, price) {
   Iddaa.prune(state.iddaa, new Date());
   if (!Iddaa.set(state.iddaa, matchId, kickoff, key, price)) return false;
   if (!persistIddaa(state.iddaa)) toast("iddaa oranı bu cihaza kaydedilemedi (tarayıcı kayıt alanı kapalı ya da dolu)");
+  refreshSide(); // masaüstü kenar çubuğundaki toplam oran iddaa oranıyla değişir
   return true;
 }
 const iddaaOf = (matchId, key) => Iddaa.get(state.iddaa, matchId, key);
@@ -391,7 +400,7 @@ function dayChipList(onChange) {
     onclick: () => { state.day = i; onChange(); } }, dayName(d, state.sport, true), h("span", { class: "n" }, d.matches.length)));
 }
 function viewToday(root) {
-  const render = () => viewToday(root);
+  const render = () => (WIDE.matches ? reselectFirst() : viewToday(root));
   if (state.sport === "minor" && !DATA.minor) { state.sport = "football"; state.day = firstDay(); }
   const day = days()[state.day];
   const n = day ? day.matches.length : 0;
@@ -512,8 +521,11 @@ function viewLeague(root, code) {
     h("th", { scope: "row", class: "tm" },
       h("span", { class: "tn" }, crest({ logos: { home: t.logo } }, "home"), h("span", { class: "nm" }, t.name)),
       h("small", {}, `${t.played} maç · ŞL ${pct(t.ucl)} · bekl. ${Math.round(t.xpts)}${t.playoff != null && t.playoff >= 0.005 ? ` · play-off ${pct(t.playoff)}` : ""}`)),
-    h("td", {}, t.gd > 0 ? `+${t.gd}` : t.gd), h("td", { class: "pt" }, t.pts),
-    cell(t, "champion", true, "Şampiyonluk"), cell(t, "europe", true, "Avrupa"), cell(t, "relegation", false, "Düşme")));
+    h("td", { class: "wcol" }, t.played), // masaüstünde ayrı sütunlar; mobilde bunlar ad altındaki küçük satırda
+    h("td", {}, t.gd > 0 ? `+${t.gd}` : t.gd), h("td", { class: "pt" }, t.pts), h("td", { class: "wcol" }, Math.round(t.xpts)),
+    cell(t, "champion", true, "Şampiyonluk"), h("td", { class: "pc wcol" }, pct(t.ucl)), cell(t, "europe", true, "Avrupa"),
+    z.playoff ? h("td", { class: "pc wcol" }, t.playoff == null ? "–" : pct(t.playoff)) : null,
+    cell(t, "relegation", false, "Düşme"))); // Düşme son sütun kalır (td:last-child dolgusu mobilde değişmesin)
   const notes = [`${fmtInt(DATA.season.n_sims)} sezon simüle edildi. Modelin takım güçleri kesin değil: her simüle sezonda güçlere, `
     + "geçmiş 4 sezonda ölçülen model hatası kadar rastgele sapma eklenir ve güçler sezon içinde haftadan haftaya biraz değişebilir. "
     + "Sakatlık ve kadro değişiklikleri ayrıca hesaba katılmaz."];
@@ -525,8 +537,10 @@ function viewLeague(root, code) {
     sec("Puan tablosu ve simülasyon", h("div", { class: "card lt-wrap" },
       h("table", { class: "ltable" },
         h("caption", { class: "sr" }, `${lg.name} puan tablosu, şampiyonluk, Avrupa ve düşme olasılıkları`),
-        h("thead", {}, h("tr", {}, ["#", "Takım", "Av", "P", "Şamp.", "Avrupa", "Düşme"].map((x, i) =>
-          h("th", { scope: "col", class: i === 1 ? "tm" : null }, x)))),
+        h("thead", {}, h("tr", {}, [["#"], ["Takım", "tm"], ["O", "wcol", "Oynanan maç"], ["Av"], ["P"],
+          ["Bekl.", "wcol", "Beklenen sezon sonu puanı"], ["Şamp."], ["ŞL", "wcol", "Şampiyonlar Ligi"], ["Avrupa"],
+          ...(z.playoff ? [["Play-off", "wcol", "Düşme play-off'u"]] : []), ["Düşme"]].map(([x, cls, title]) =>
+          h("th", { scope: "col", class: cls || null, title: title || null }, x)))),
         h("tbody", {}, rows))),
       h("p", { class: "sec-note" }, `Çizgiler bölge sınırları: Şampiyonlar Ligi ${zoneText(z.ucl)}, Avrupa kupaları ${zoneText(z.europe)}`
         + (z.playoff ? `, düşme play-off'u ${zoneText(z.playoff)}` : "") + `, düşme ${zoneText(z.relegation)} sıra. `
@@ -547,14 +561,15 @@ function shareBtn(m) {
   return h("a", { class: "icon-btn", href: `https://wa.me/?text=${encodeURIComponent(text)}`, target: "_blank", rel: "noopener",
     "aria-label": "Maçı WhatsApp'ta paylaş" }, icon("share", 22, 2));
 }
-function viewMatch(root, id, from) {
-  const back = from === "value" ? backLink("#/degerli", "Değerli") : backLink("#/", "Bugün");
+function viewMatch(root, id, from, opts) {
+  const wide = !!(opts && opts.wide); // masaüstü sağ sütun: geri bağlantısı yok, liste solda duruyor
+  const back = wide ? h("span") : from === "value" ? backLink("#/degerli", "Değerli") : backLink("#/", "Bugün");
   const ref = byId.get(id);
   const top = h("div", { class: "topnav" }, back, ref ? shareBtn(ref.match) : null);
   if (!ref) { root.replaceChildren(top, h("p", { class: "empty" }, "Maç bulunamadı; veriler güncellenmiş olabilir.")); return; }
   const m = ref.match, nba = m.sport === "basketball";
   if (!state.mtab || state.mtab.id !== id) state.mtab = { id, tab: "result" };
-  const render = () => { const y = window.scrollY; viewMatch(root, id, from); window.scrollTo(0, y); };
+  const render = () => { const y = window.scrollY; viewMatch(root, id, from, opts); window.scrollTo(0, y); };
   const rank = (side) => {
     const t = m.info && m.info.table, src = m.info && m.info[`${side}_src`];
     const r = t && src && t.find((x) => x["Takım"] === src);
@@ -577,12 +592,36 @@ function viewMatch(root, id, from) {
     h("h1", { class: "sr" }, matchLabel(m)),
     h("div", { class: "versus" }, side("home"), mid, side("away")),
     m.report ? karneCard(m) : null,
-    segmented("Bölüm", tabs, tab, (v) => { state.mtab.tab = v; render(); }));
+    wide ? null : segmented("Bölüm", tabs, tab, (v) => { state.mtab.tab = v; render(); }));
+  if (wide) { root.replaceChildren(top, head, ...detailGrid(m, tabs.map(([k]) => k), render), note(isMinor(m))); return; }
   const body = tab === "goals" ? goalsTab(m, render) : tab === "points" ? pointsTab(m, render)
     : tab === "teams" ? teamsTab(m) : resultTab(m, render);
   root.replaceChildren(top, head, ...body.filter(Boolean), note(isMinor(m)));
 }
 
+/* Masaüstü maç detayı: sekmeler yerine kartlar iki sütunda. Sol: olasılıklar ve iddaa (sonuç, çifte şans, gol / sayı
+   pazarları); sağ: oran hareketi ve takım bilgisi (form, xG, istatistik, eksikler, puan durumu). Uyarılar üstte, notlar altta
+   tam genişlik. 1280 px altında iki yığın alt alta (önce sol). */
+function detailGrid(m, tabKeys, render) {
+  const build = { result: () => resultTab(m, render), goals: () => goalsTab(m, render), points: () => pointsTab(m, render),
+    teams: () => teamsTab(m) };
+  const top = [], left = [], lines = [], right = [], bottom = [];
+  for (const k of tabKeys) {
+    for (const el of build[k]().filter(Boolean)) {
+      const title = el.tagName === "SECTION" && el.querySelector(":scope > .sec-h");
+      if (!title) (el.classList.contains("alert") ? top : bottom).push(el);
+      else if (k === "teams" || title.textContent === "Oran hareketi") right.push(el);
+      else (k === "result" ? left : lines).push(el);
+    }
+  }
+  // Takım bilgisi yoksa (ör. NBA verisi kurulamadı) gol / sayı pazarları sağ sütuna: tek sütun yarım kalmasın
+  if (!right.length) right.push(...lines); else left.push(...lines);
+  // Biten maçta sol tek kart (Maç sonucu) kalır: oran grafiği sola geçer, sütunlar dengelenir
+  const chart = right.find((el) => el.querySelector(":scope > .sec-h").textContent === "Oran hareketi");
+  if (chart && left.length < 2 && right.length > 2) { right.splice(right.indexOf(chart), 1); left.push(chart); }
+  const col = (xs) => (xs.length ? h("div", { class: "dcol" }, xs) : null);
+  return [...top, h("div", { class: "dgrid" }, col(left), col(right)), ...bottom];
+}
 /* §32 Karne: gerçek skor, xG, maç öncesi son olasılıklar (piyasa / model), gerçekleşen sonuca verilen olasılık,
    modelin en olası skoru ve tek cümlelik "kim haklıydı". */
 function outcomeName(m, o, dative) {
@@ -1001,16 +1040,17 @@ function viewValue(root) {
   const kids = [head(segmented("Spor", [["football", `Futbol · ${fb.length}`], ["basketball", `NBA · ${nb.length}`]], cur,
     (x) => { state.vsport = x; render(); }))];
   const list = cur === "basketball" ? nb : fb;
-  kids.push(sec("Seçenekler", list.length ? card(list.map(valueRow))
+  const vleft = [];
+  vleft.push(sec("Seçenekler", list.length ? card(list.map(valueRow))
     : padCard(h("p", { class: "muted" }, "Şu an eşiği geçen seçenek yok.")),
   h("p", { class: "sec-note" }, "Beklenen değeri pozitif olanlar (iddaa oranı girdiklerin) en üstte, sonra farka göre. ",
     "Adil oran = 1 ÷ model olasılığı; beklenen değer sitede gösterilen olasılıkla. iddaa oranı girdiğin ama eşik altında kalan ",
     "seçenekler \"eşik altı\" etiketiyle görünür.")));
   if (cur === "football" && minor.length) {
-    kids.push(sec("Diğer ligler · doğrulanmamış model", card(minor.map(valueRow)),
+    vleft.push(sec("Diğer ligler · doğrulanmamış model", card(minor.map(valueRow)),
       h("p", { class: "sec-note" }, "Bu liglerde piyasa olasılığı yok; sadece iddaa oranı girdiğin seçenekler, model olasılığıyla. Takibe girmez.")));
   }
-  kids.push(valueTracking(v), h("p", { class: "foot" }, VALUE_NOTE), note());
+  kids.push(twoCol(vleft, [valueTracking(v)]), h("p", { class: "foot" }, VALUE_NOTE), note());
   root.replaceChildren(...kids);
 }
 function valueTracking(v) {
@@ -1115,7 +1155,8 @@ function viewKupon(root) {
   const dup = [...new Set(legs.filter((l) => counts[l.matchId] > 1).map((l) => l.match))];
   const late = [...new Set(legs.filter((l) => new Date(l.kickoff) <= new Date()).map((l) => l.match))];
 
-  kids.push(sec("Seçimler", card(legs.map((l) => {
+  const kleft = [], kright = [];
+  kleft.push(sec("Seçimler", card(legs.map((l) => {
     const lab = legVerified(l) ? evText(Iddaa.expectedValue(l.prob, legPrice(l)), legModel(l)) : null;
     return h("div", { class: "kleg row" },
       h("div", { class: "info" }, h("span", { class: "pick" }, l.pick),
@@ -1137,14 +1178,14 @@ function viewKupon(root) {
       h("button", { type: "button", class: "rm", "aria-label": `${l.pick} seçimini kaldır`,
         onclick: () => { state.kupon = state.kupon.filter((x) => x.key !== l.key); saveKupon(); render(); } }, removeIcon()));
   })), h("p", { class: "sec-note" }, "Oranlar iddaa'da gördüğün değerler; maç detayıyla ortak. Kutuyu boşaltırsan seçimin eklendiği orana döner.")));
-  if (dup.length) kids.push(h("p", { class: "alert warn" }, h("b", {}, "Aynı maçtan birden fazla seçim: "), `${dup.join(", ")}. Bahis siteleri kabul etmeyebilir.`));
-  if (late.length) kids.push(h("p", { class: "alert warn" }, h("b", {}, "Başlamış maç: "), late.join(", ")));
+  if (dup.length) kleft.push(h("p", { class: "alert warn" }, h("b", {}, "Aynı maçtan birden fazla seçim: "), `${dup.join(", ")}. Bahis siteleri kabul etmeyebilir.`));
+  if (late.length) kleft.push(h("p", { class: "alert warn" }, h("b", {}, "Başlamış maç: "), late.join(", ")));
 
   const evLab = totalEV == null ? null : evText(totalEV, anyModel);
   const evCls = !evLab || anyModel ? "" : evLab.band === "value" ? "good-t" : evLab.band === "low" ? "bad-t" : "";
   let stakeText = String(state.stake).replace(".", ",");
   const payout = h("b", {}, `${fmtMoney(Math.round(state.stake * total * 100) / 100)} TL`);
-  kids.push(h("div", { class: "card pad" },
+  kright.push(h("div", { class: "card pad" },
     h("div", { class: "sum3" },
       h("div", {}, h("small", {}, "Toplam oran"), h("span", { class: "num" }, odds(total))),
       h("div", {}, h("small", {}, "Tutma ihtimali"), h("span", { class: "num" }, totalProb == null ? "–" : `%${fmtDec(totalProb * 100)}`)),
@@ -1169,7 +1210,8 @@ function viewKupon(root) {
     h("div", { class: "btn-row" },
       h("a", { class: "btn sm", href: shareLink(legs, total, totalProb), target: "_blank", rel: "noopener" }, "WhatsApp'ta paylaş"),
       h("button", { type: "button", class: "btn sm danger", onclick: () => { state.kupon = []; state.playing = false; saveKupon(); render(); } }, "Kuponu temizle"))));
-  kids.push(budgetSection(state.stake));
+  kright.push(budgetSection(state.stake));
+  kids.push(twoCol(kleft, kright));
   root.replaceChildren(...kids, note());
 }
 /* "Oynadım": tutar + kupon tipi (otomatik dolar, değiştirilebilir) → geçmişe kayıt. */
@@ -1251,7 +1293,7 @@ function viewSuggest(root) {
       h("div", { style: "margin:2px 6px 0;text-align:left" }, oddsStamp()))];
   const warn = oddsWarning();
   if (warn) kids.push(warn);
-  for (const [kind, title, desc] of KINDS) kids.push(couponCard(day, kind, title, desc));
+  kids.push(h("div", { class: "cgrid" }, KINDS.map(([kind, title, desc]) => couponCard(day, kind, title, desc))));
   kids.push(note(), quotaLine());
   root.replaceChildren(...kids.filter(Boolean));
 }
@@ -1399,7 +1441,15 @@ function settingsSection(render) {
       h("div", { class: "set-row row" }, h("span", { id: "theme-l" }, "Tema"),
         segmented("Tema", [["system", "Sistem"], ["dark", "Koyu"], ["light", "Açık"]], theme, (v) => { setTheme(v); render(); }, "sm")),
       h("button", { type: "button", class: "link-btn row", disabled: !state.history.coupons.length, onclick: download }, "Yedekle"),
-      h("button", { type: "button", class: "link-btn row", onclick: () => file.click() }, "Yedekten yükle")), file,
+      h("button", { type: "button", class: "link-btn row", onclick: () => file.click() }, "Yedekten yükle"),
+      h("button", { type: "button", class: "link-btn row upd", "aria-live": "polite", onclick: async (ev) => {
+        const btn = ev.currentTarget, out = btn.querySelector(".upd-st");
+        btn.disabled = true;
+        out.textContent = "Denetleniyor…";
+        const r = await updateApp();
+        out.textContent = UPDATE_TEXT[r];
+        if (r !== "activating") btn.disabled = false;
+      } }, h("span", {}, "Uygulamayı güncelle"), h("span", { class: "upd-st muted" }))), file,
     h("p", { class: "sec-note" }, `Kayıtlar sadece bu cihazda. Son yedek: ${lastBackupText()}. `,
       "Tarayıcı verisi silinirse kaybolur; ara sıra yedek al. Yedekten yükleme mevcut kuponları silmez, birleştirir."));
 }
@@ -1423,11 +1473,10 @@ function viewHistory(root) {
   } else if (!shown.length) {
     kids.push(padCard(h("p", { class: "muted" }, `${monthName} ayında oynanan kupon yok.`)));
   } else {
-    kids.push(summaryCard(History.summarize(shown), History.calibration(shown)));
-    kids.push(sec("Kupon tipine göre", typeRows(shown)));
+    const hleft = [summaryCard(History.summarize(shown), History.calibration(shown)), sec("Kupon tipine göre", typeRows(shown))];
     const unv = shown.filter((c) => c.unverified).length;
-    kids.push(sec("Kuponlar", card(shown.map(couponRow)),
-      unv ? h("p", { class: "sec-note" }, `${unv} kupon iddaa oranı girilmeden kaydedildi ("Oran doğrulanmadı"); kazançları gerçek iddaa oranıyla farklı olabilir.`) : null));
+    kids.push(twoCol(hleft, [sec("Kuponlar", card(shown.map(couponRow)),
+      unv ? h("p", { class: "sec-note" }, `${unv} kupon iddaa oranı girilmeden kaydedildi ("Oran doğrulanmadı"); kazançları gerçek iddaa oranıyla farklı olabilir.`) : null)]));
   }
   kids.push(settingsSection(render));
   kids.push(h("p", { class: "foot" }, "Sonuçlar maç bittikten sonraki sabah güncellemesiyle gelir (son 7 gün). Ertelenen, iptal edilen ",
@@ -1555,13 +1604,10 @@ function viewPerformance(root) {
   }
   if (v && v.tracking) live.push(liveRow("Değerli takibi", v.tracking.settled, v.min_reliable, "seçenek",
     `${v.min_reliable} sonuçlanmış seçenekten sonra güvenilir.`));
-  if (live.length) kids.push(sec("Canlı ölçüm", card(live)));
-
-  if (p && p.n) kids.push(...liveFootball(p));
-  kids.push(...backtestFootball());
-  kids.push(calibrationSection(render));
-  if (nb) kids.push(...nbaPerf(nb));
-  kids.push(...minorPerf());
+  // Sıra mobildekiyle aynı (canlı, geçmiş test, kalibrasyon, NBA, diğer ligler); masaüstünde ikiye bölünür
+  const pleft = [live.length ? sec("Canlı ölçüm", card(live)) : null, ...(p && p.n ? liveFootball(p) : []), ...backtestFootball()];
+  const pright = [calibrationSection(render), ...(nb ? nbaPerf(nb) : []), ...minorPerf()];
+  kids.push(twoCol(pleft, pright));
   kids.push(note());
   root.replaceChildren(...kids.filter(Boolean));
 }
@@ -1764,7 +1810,7 @@ function route() {
     r.from = lastRoute && lastRoute.view === "value" ? "value" : lastRoute && lastRoute.view === "match" ? lastRoute.from : "today";
     if (r.from === "value") r.tab = "degerli";
   }
-  if (lastRoute && (lastRoute.view === "today" || lastRoute.view === "value")) scrollMemo[lastRoute.view] = window.scrollY;
+  if (lastRoute && (lastRoute.view === "today" || lastRoute.view === "value") && !WIDE.matches) scrollMemo[lastRoute.view] = window.scrollY;
   const back = lastRoute && lastRoute.view === "match" && (r.view === "today" || r.view === "value");
   lastRoute = r;
   document.querySelectorAll(".tabbar a").forEach((a) => {
@@ -1779,8 +1825,22 @@ function route() {
       const i = days().findIndex((d) => d.matches.some((mm) => mm.id === r.id));
       if (i >= 0) state.day = i;
     }
-    viewMatch(root, r.id, r.from);
   }
+  // Masaüstü (≥ 1024 px): liste ortada, seçili maç sağda; diğer sekmeler orta + sağ alanda (desktop.js)
+  const day = r.view === "today" || r.view === "match" ? days()[state.day] : null;
+  const lay = Desktop.layoutFor(r, WIDE.matches, day && day.matches.length ? day.matches[0].id : null);
+  setLayout(lay.layout);
+  if (lay.layout === "split") { r.tab = lay.tab; if (r.view === "match") r.from = "today"; } // sonraki tıklamalar Değerli'yi miras almasın
+  if (lay.layout !== "mobile") Desktop.renderSide(document.getElementById("side"), r.tab);
+  if (lay.layout === "split") {
+    if (lay.replaceHash) {
+      history.replaceState(null, "", lay.replaceHash);
+      r = lastRoute = { view: "match", tab: "bugun", id: lay.detailId, from: "today" };
+    }
+    routeSplit(root, lay.detailId, r.tab);
+    return;
+  }
+  if (r.view === "match") viewMatch(root, r.id, r.from);
   else if (r.view === "today") viewToday(root);
   else if (r.view === "league") viewLeague(root, r.id);
   else if (r.view === "kupon") viewKupon(root);
@@ -1791,7 +1851,49 @@ function route() {
   else if (r.view === "history") viewHistory(root);
   const nb = noticesBar();
   if (nb) { const hd = root.querySelector(":scope > header, :scope > .topnav"); if (hd) hd.after(nb); else root.prepend(nb); }
-  window.scrollTo(0, back ? scrollMemo[r.view] || 0 : 0);
+  if (WIDE.matches) root.scrollTop = 0;
+  else window.scrollTo(0, back ? scrollMemo[r.view] || 0 : 0);
+}
+/* ---------- masaüstü düzeni (≥ 1024 px; mobilde hiçbiri çalışmaz) ---------- */
+const WIDE = window.matchMedia("(min-width: 1024px)");
+let listKey = null; // ortadaki listenin çizildiği spor|gün; aynıysa liste yeniden çizilmez (kaydırma yeri korunur)
+function setLayout(layout) {
+  if (document.body.dataset.layout === layout) return;
+  document.body.dataset.layout = layout;
+  document.getElementById("detail").dataset.id = ""; // başka sekmede kupon/iddaa değişmiş olabilir: detay yeniden çizilsin
+  document.getElementById("detail").hidden = layout !== "split";
+  document.getElementById("side").hidden = layout === "mobile";
+  listKey = null;
+}
+function routeSplit(root, id, tab) {
+  const key = `${state.sport}|${state.day}`;
+  if (listKey !== key) {
+    viewToday(root);
+    const nb = noticesBar();
+    if (nb) { const hd = root.querySelector(":scope > header"); if (hd) hd.after(nb); }
+    root.scrollTop = 0;
+    listKey = key;
+  }
+  const href = id == null ? null : `#/mac/${encodeURIComponent(id)}`;
+  let sel = null;
+  root.querySelectorAll("a.mrow").forEach((a) => {
+    const on = a.getAttribute("href") === href;
+    if (on) { a.setAttribute("aria-current", "true"); sel = a; } else a.removeAttribute("aria-current");
+  });
+  if (sel) sel.scrollIntoView({ block: "nearest" });
+  const detail = document.getElementById("detail");
+  if (detail.dataset.id !== String(id)) {
+    if (id == null) detail.replaceChildren(h("p", { class: "empty" }, "Bu gün için maç yok."));
+    else viewMatch(detail, id, "today", { wide: true });
+    detail.dataset.id = String(id);
+    detail.scrollTop = 0;
+  }
+}
+/* Masaüstünde spor/gün çipi: liste yenilenir, ilk maç seçilir (adres yer değiştirir, geçmiş şişmez). */
+function reselectFirst() {
+  listKey = null;
+  history.replaceState(null, "", "#/");
+  route();
 }
 /* Kullanıcıya duyurular (ör. harman canlıda piyasadan kötü çıkınca piyasaya dönüldü); son 30 gün. */
 function noticesBar() {
@@ -1820,19 +1922,39 @@ async function init() {
   applyResults(); // §27 biten maçların skorları oynanan kuponlara
   updateHeader();
   window.addEventListener("hashchange", route);
+  WIDE.addEventListener("change", route); // 1023 ↔ 1024 px: sayfa yenilenmeden düzen değişir
   route();
 }
 
 /* ---------- PWA: bağlantı bandı ve service worker güncellemesi ---------- */
 function showNetBanner(mode) {
   const banner = document.getElementById("net-banner");
-  if (mode !== "offline" && mode !== "slow") { banner.hidden = true; return; }
+  if (mode !== "offline" && mode !== "slow") { banner.hidden = true; document.body.classList.remove("net-on"); return; }
+  document.body.classList.add("net-on");
   const when = DATA && DATA.generated_at ? fmtDateTime(DATA.generated_at) : "bilinmiyor";
   document.getElementById("net-text").textContent =
     `${mode === "slow" ? "Bağlantı yavaş" : "Çevrimdışı"} – son veri: ${when}`;
   banner.hidden = false;
 }
 
+/* Geçmiş > Ayarlar "Uygulamayı güncelle": bant görünmese de (ör. kapatıldı, çentiğe takıldı) bekleyen sürümü etkinleştirir.
+   Sonuç: activating (controllerchange sayfayı yeniler) | current | offline | unsupported. */
+let swReg = null;
+async function updateApp() {
+  if (!("serviceWorker" in navigator) || !swReg) return "unsupported";
+  try { await swReg.update(); } catch { return "offline"; }
+  const activate = (w) => { w.postMessage("SKIP_WAITING"); return "activating"; };
+  if (swReg.waiting) return activate(swReg.waiting);
+  const w = swReg.installing;
+  if (!w) return "current";
+  return new Promise((resolve) => {
+    w.addEventListener("statechange", () => {
+      if (w.state === "installed") resolve(swReg.waiting ? activate(swReg.waiting) : "current");
+      else if (w.state === "redundant") resolve("current");
+    });
+  });
+}
+const UPDATE_TEXT = { activating: "Yükleniyor…", current: "Güncel", offline: "Bağlantı yok", unsupported: "Bu tarayıcıda desteklenmiyor" };
 function setupServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   document.getElementById("net-reload").addEventListener("click", () => location.reload());
@@ -1852,6 +1974,7 @@ function setupServiceWorker() {
     };
   };
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => {
+    swReg = reg;
     // Önceki oturumda bildirilip uygulanmamış sürüm: açılışta hemen geçilir, eski sürüm takılı kalmaz
     if (reg.waiting && hadController) { reg.waiting.postMessage("SKIP_WAITING"); return; }
     reg.addEventListener("updatefound", () => {

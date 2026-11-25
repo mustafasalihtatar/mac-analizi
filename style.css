@@ -236,8 +236,14 @@ span.logo.lg { background: var(--surface-2); border: 1px solid var(--line); }
 .banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 612px;
   margin: calc(8px + env(safe-area-inset-top)) auto 0; width: calc(100% - 2 * var(--gutter));
   padding: 6px 6px 6px 14px; border-radius: 14px; font-size: 14px; background: var(--surface); color: var(--text); }
-.banner + .banner { margin-top: 8px; }
-.banner button { flex-shrink: 0; min-height: 40px; border: 0; border-radius: 10px; padding: 0 14px; background: var(--surface-2); color: var(--text); font-weight: 600; }
+/* Bağlantı bandı kaydırınca da durum çubuğunun / Dynamic Island'ın altında görünür kalır (iPhone ana ekran uygulaması). */
+#net-banner { position: sticky; z-index: 25; top: calc(8px + env(safe-area-inset-top)); box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
+.net-on .hd { padding-top: 14px; }
+.net-on .topnav { padding-top: 4px; }
+/* "Yeni sürüm var" alt menünün hemen üstünde: başparmakla erişilir, üstteki çentiğe takılmaz. */
+#sw-banner { position: fixed; z-index: 21; margin: 0 auto; left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right));
+  width: auto; bottom: calc(14px + 62px + 10px + env(safe-area-inset-bottom)); box-shadow: 0 6px 20px rgba(0, 0, 0, .3); }
+.banner button { flex-shrink: 0; min-height: 44px; border: 0; border-radius: 10px; padding: 0 14px; background: var(--surface-2); color: var(--text); font-weight: 600; }
 .banner.update { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 .banner.update button { background: var(--on-accent); color: var(--accent); }
 .alert { border-radius: 14px; padding: 12px 14px; font-size: 13px; line-height: 1.45; background: var(--surface); color: var(--text); }
@@ -505,3 +511,82 @@ details.more p { line-height: 1.45; margin-bottom: 8px; }
 .vin { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 10px; align-items: center; padding-top: 2px; }
 .link-btn.row { border-bottom: 1px solid var(--line); }
 .link-btn.row:last-child { border-bottom: 0; }
+.link-btn.upd { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.link-btn.upd .upd-st { font-size: 13px; }
+
+/* ---------- masaüstü (≥ 1024 px): kenar çubuğu 232 · liste 540 · detay kalan alan; her sütun ayrı kayar ----------
+   1023 px ve altı bu bloğa hiç girmez: mobil düzen aynen kalır. */
+@media (min-width: 1024px) {
+  html, body { height: 100%; }
+  body { display: grid; grid-template-columns: 232px clamp(340px, 30vw, 540px) minmax(0, 1fr); height: 100vh; height: 100dvh; overflow: hidden; }
+  .sidebar, main, .detail { height: 100vh; height: 100dvh; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; min-width: 0; }
+  .sidebar { grid-column: 1; grid-row: 1; border-right: 1px solid var(--line); }
+  main { grid-column: 2; grid-row: 1; max-width: none; width: 100%; margin: 0; padding: 0 18px 40px; }
+  .detail { grid-column: 3; grid-row: 1; border-left: 1px solid var(--line); padding: 0 28px 48px;
+    display: flex; flex-direction: column; gap: 22px; outline: none; }
+  .detail > * { width: 100%; max-width: 1100px; margin-left: auto; margin-right: auto; }
+  body[data-layout="full"] main { grid-column: 2 / 4; padding: 0 32px 48px; }
+  body[data-layout="full"] main > * { width: 100%; max-width: 1100px; margin-left: auto; margin-right: auto; }
+  .tabbar { display: none; }
+  main .brandbar { justify-content: flex-end; min-height: 44px; }
+  main .brandbar .brand { display: none; } /* logo kenar çubuğunda */
+  /* Kenar çubuğu: logo, dikey menü (alt menünün ikonları, seçili --accent kapsül), kupon özeti, oran zamanı */
+  .sidebar { display: flex; flex-direction: column; gap: 22px; padding: calc(22px + env(safe-area-inset-top)) 14px calc(24px + env(safe-area-inset-bottom)); }
+  .sb-brand { padding: 0 6px; }
+  .sb-nav { display: flex; flex-direction: column; gap: 4px; }
+  .sb-nav a { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 0 14px; border-radius: 17px;
+    color: var(--muted); font-size: 15px; font-weight: 500; text-decoration: none; }
+  .sb-nav a:hover { background: var(--surface); color: var(--text); }
+  .sb-nav a[aria-current="page"] { background: var(--accent); color: var(--on-accent); font-weight: 700; }
+  .sb-nav a[aria-current="page"] svg { stroke-width: 2.1; }
+  .sb-nav a[aria-current="page"] .on-fill { fill: currentColor; }
+  .sb-nav svg { flex-shrink: 0; }
+  .sb-count { margin-left: auto; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--surface-2);
+    color: var(--text); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .sb-nav a[aria-current="page"] .sb-count { background: var(--on-accent); color: var(--accent); }
+  .sb-leg { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 14px; }
+  .sb-leg-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .sb-pick { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+  .sb-leg-info small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sb-odds { font-family: var(--display); font-weight: 800; font-size: 16px; }
+  .sb-total { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px; font-size: 13px; color: var(--muted); }
+  .sb-total .num { font-size: 26px; font-stretch: 85%; color: var(--text); }
+  .sb-open { padding: 0 12px 12px; }
+  .sb-empty { gap: 4px; font-size: 13px; }
+  .sb-empty p:first-child { font-weight: 600; }
+  .sb-foot { margin: auto 6px 0; display: flex; flex-direction: column; gap: 3px; }
+  .sb-foot-h { font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+  /* Seçili maç satırı */
+  .mrow.row[aria-current="true"] { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+  .mrow.row:hover { background: var(--surface-2); }
+  /* Bantlar ve bildirim kenar çubuğunun sağında, sütunların üstünde yüzer */
+  /* iPad yatay ana ekran uygulaması da ≥ 1024 px: durum çubuğu ve ev çubuğu payı */
+  #net-banner { position: fixed; top: calc(12px + env(safe-area-inset-top)); left: 244px; right: 16px; width: auto; margin: 0 auto; }
+  #sw-banner { left: 244px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .toast { left: calc(50% + 116px); bottom: 24px; }
+  .net-on .hd { padding-top: 84px; }
+  .net-on .topnav { padding-top: 74px; }
+}
+@media (min-width: 1024px) {
+  .detail { container-type: inline-size; }
+  .dgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; align-items: start; }
+  .dcol { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+  .dcol .card:has(table) { overflow-x: auto; } /* dar sütunda tablo kesilmesin, kart içinde kaysın */
+}
+/* İki sütun detay alanı yeterince genişse (≈1366 px ekran ve üstü); daha darda kartlar tek sütun */
+@container (min-width: 600px) {
+  .dgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 20px; }
+}
+/* Masaüstü sayfa ızgaraları: mobilde kapsayıcılar yok sayılır (display: contents), sıra ve görünüm aynı kalır */
+.pgrid, .pcol, .cgrid { display: contents; }
+.ltable .wcol { display: none; }
+@media (min-width: 1024px) {
+  body[data-layout="full"] main { container-type: inline-size; }
+  .ltable .wcol { display: table-cell; }
+  .ltable .tm small { display: none; } /* oynanan maç, ŞL ve beklenen puan masaüstünde ayrı sütunlarda */
+}
+@container (min-width: 760px) {
+  .pgrid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 22px 24px; align-items: start; }
+  .pcol { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+  .cgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 22px 20px; align-items: start; }
+}
