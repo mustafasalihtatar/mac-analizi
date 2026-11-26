@@ -78,23 +78,67 @@ const History = (() => {
     }
   }
 
-  /* Seçimin geçerli sonucu: elle girilen her zaman önce; sonra skor (yalnızca durum "finished" ise). */
+  /* Seçimin geçerli sonucu: elle girilen her zaman önce; sonra resmi skor (yalnızca durum "finished" ise); resmi durum yoksa
+     §37 geçici (iddaa canlı) skor. */
   function legResult(leg) {
     if (MANUAL.includes(leg.manual)) return leg.manual;
-    if (leg.status !== "finished") return null;
-    return legFromScore(leg.key, leg.score);
+    if (leg.status === "finished") return legFromScore(leg.key, leg.score);
+    if (leg.status == null && leg.prov) return legFromScore(leg.key, leg.prov.score);
+    return null;
   }
+  /* Sonucu geçici skordan mı geliyor. */
+  const legProvisional = (leg) => !MANUAL.includes(leg.manual) && leg.status == null && !!leg.prov
+    && legFromScore(leg.key, leg.prov.score) !== null;
   /* Elle sonuçlandırılması gereken (ertelendi / iptal / uzatma) ve elle girilmemiş seçim. */
   const needsManual = (leg) => PENDING_STATUSES.includes(leg.status) && !MANUAL.includes(leg.manual);
 
   /* Kupon: won | lost | void | pending, dönen tutar (bekliyorsa null). Bir seçim yatarsa kupon hemen yatar. */
   function settle(c) {
     const rs = c.legs.map(legResult);
-    if (rs.includes("lost")) return { status: "lost", payout: 0, odds: null };
-    if (rs.some((r) => r === null)) return { status: "pending", payout: null, odds: null };
-    if (rs.every((r) => r === "void")) return { status: "void", payout: round2(c.stake), odds: 1 };
+    // §37 sonuç geçici skora dayanıyor mu (yatan kuponda: yatıran seçimlerden biri geçiciyse); probable: kod 6 görülmeden bitti sayılan
+    const flags = (used) => {
+      const provs = c.legs.filter((l, i) => used(rs[i]) && legProvisional(l));
+      return { provisional: provs.length > 0, probable: provs.some((l) => l.prov.certain === false) };
+    };
+    if (rs.includes("lost")) {
+      const official = c.legs.some((l, i) => rs[i] === "lost" && !legProvisional(l)); // resmi yatan seçim varsa kesin yattı
+      return { status: "lost", payout: 0, odds: null, ...(official ? { provisional: false, probable: false } : flags((r) => r === "lost")) };
+    }
+    if (rs.some((r) => r === null)) return { status: "pending", payout: null, odds: null, provisional: false, probable: false };
+    if (rs.every((r) => r === "void")) return { status: "void", payout: round2(c.stake), odds: 1, ...flags(() => true) };
     const odds = c.legs.reduce((acc, l, i) => acc * (rs[i] === "won" ? num(l.price) : 1), 1);
-    return { status: "won", payout: round2(c.stake * odds), odds };
+    return { status: "won", payout: round2(c.stake * odds), odds, ...flags(() => true) };
+  }
+
+  /* §37 muhtemel bitti sayılan maç yeniden canlı göründü: o maçların muhtemel (certain: false) geçici skoru geri alınır. */
+  function withdrawProvisional(store, matchIds, nowIso) {
+    const ids = new Set(matchIds || []);
+    let changed = 0;
+    for (const c of store.coupons) {
+      let touched = false;
+      for (const l of c.legs) if (ids.has(l.matchId) && l.prov && l.prov.certain === false) { l.prov = null; touched = true; }
+      if (touched) { c.updatedAt = nowIso; changed++; }
+    }
+    return changed;
+  }
+
+  /* §37 iddaa'da biten maçların geçici skoru ([{id, score, certain}]) → resmi/elle sonucu olmayan seçimlere `prov`. Değişen kupon sayısı. */
+  function applyProvisional(store, items, nowIso) {
+    const by = new Map((items || []).filter((x) => x && typeof x.id === "string" && parseScore(x.score)).map((x) => [x.id, x]));
+    let changed = 0;
+    for (const c of store.coupons) {
+      let touched = false;
+      for (const l of c.legs) {
+        const x = by.get(l.matchId);
+        if (!x || l.status != null || MANUAL.includes(l.manual)) continue;
+        const certain = x.certain === true;
+        if (l.prov && l.prov.score === x.score && l.prov.certain === certain) continue;
+        l.prov = { score: String(x.score), at: nowIso, certain };
+        touched = true;
+      }
+      if (touched) { c.updatedAt = nowIso; changed++; }
+    }
+    return changed;
   }
 
   /* data.json "results" ([{id, score, status}]) → bekleyen seçimlere skor/durum yazar. Kaydedilen değer kalıcı:
@@ -110,6 +154,7 @@ const History = (() => {
         const score = r.score == null ? null : String(r.score);
         if (l.status === "finished" && l.score) continue; // biten maçın skoru bir kez yazılır
         if (l.status !== r.status || l.score !== score) { l.status = r.status; l.score = score; touched = true; }
+        if (l.prov) { l.prov = null; touched = true; } // §37 resmi durum geldi: geçici skor artık geçmez
       }
       if (touched) { c.updatedAt = new Date().toISOString(); changed++; }
     }
@@ -185,7 +230,7 @@ const History = (() => {
       totalOdds: round2(price), totalProb, unverified: legs.some((l) => l.verified === false),
       legs: legs.map((l) => ({ key: l.key, matchId: l.matchId, pick: l.pick, match: l.match, competition: l.competition || "",
         kickoff: l.kickoff, price: round2(num(l.price)), prob: finite(l.prob) ? num(l.prob) : null, fair: !!l.fair,
-        verified: l.verified !== false, status: null, score: null, manual: null })),
+        verified: l.verified !== false, status: null, score: null, manual: null, prov: null })),
     };
   }
   const emptyStore = () => ({ version: VERSION, budget: null, coupons: [] });
@@ -211,12 +256,15 @@ const History = (() => {
     });
     return e;
   }
+  /* §37 geçici skor: geçersizse (eski/bozuk yedek) atılır, dosya reddedilmez. */
+  const normProv = (p) => (p && typeof p === "object" && parseScore(p.score) && p.at && !isNaN(new Date(p.at))
+    ? { score: String(p.score), at: p.at, certain: p.certain === true } : null);
   function normalizeCoupon(c) {
     return { ...c, type: normType(c.type), stake: num(c.stake), totalOdds: num(c.totalOdds),
       totalProb: c.totalProb == null ? null : num(c.totalProb), updatedAt: c.updatedAt || c.playedAt,
       unverified: c.unverified === true, // §29 öncesi kayıtlarda alan yok → doğrulanmış sayılır
       legs: c.legs.map((l) => ({ ...l, price: num(l.price), prob: l.prob == null ? null : num(l.prob), verified: l.verified !== false,
-        status: l.status || null, score: l.score == null ? null : String(l.score), manual: l.manual || null })) };
+        status: l.status || null, score: l.score == null ? null : String(l.score), manual: l.manual || null, prov: normProv(l.prov) })) };
   }
   /* Metin (yedek dosyası ya da localStorage) → {ok, store} | {ok: false, error}. */
   function parseStore(text) {
@@ -250,8 +298,8 @@ const History = (() => {
   }
   const serialize = (store) => JSON.stringify({ version: VERSION, budget: store.budget, coupons: store.coupons }, null, 1);
 
-  return { VERSION, TYPES, TYPE_NAMES, normType, detectType, parseKey, parseScore, legFromScore, legResult, needsManual,
-    settle, applyResults, monthKey, summarize, byType, calibration, budgetState, makeCoupon, emptyStore, parseStore,
+  return { VERSION, TYPES, TYPE_NAMES, normType, detectType, parseKey, parseScore, legFromScore, legResult, legProvisional, needsManual,
+    settle, applyResults, applyProvisional, withdrawProvisional, monthKey, summarize, byType, calibration, budgetState, makeCoupon, emptyStore, parseStore,
     mergeStores, serialize };
 })();
 

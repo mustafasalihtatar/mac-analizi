@@ -436,6 +436,155 @@ function iddaaFeedSection(render) {
       "Elle girdiğin oran her zaman önce gelir. Açıkken uygulama açılışta en fazla 2 saatte bir çeker; çekilemezse elle girişe dönülür."));
 }
 
+/* ---------- §37 canlı skor (iddaa, tarayıcıda) ----------
+   Sadece sayfa görünürken ve o sporda canlı olabilecek maç varken; spor başına 45 sn (bitişe yakın maç varsa 15 sn). Fark zinciri
+   (Live.merge); ham yanıt saklanmaz. Biten maçın skoru oynanmış kuponlara geçici sonuç (History.applyProvisional) olarak yazılır;
+   resmi sonuç (data.json results) gelince o geçer. */
+const LIVE_STORE = "macanaliz.canli.oto.v1"; // "0" = kapalı (varsayılan açık)
+const LIVE_DURUM = "macanaliz.canli.durum.v1"; // son çekim, hata, görülen durum kodları (spor başına)
+const LIVE_SPORTS = ["football", "basketball"];
+const LIVE_WINDOW_MS = { football: 3 * 3600 * 1000, basketball: 3.5 * 3600 * 1000 };
+state.live = { football: Live.emptyTable(), basketball: Live.emptyTable() };
+state.liveIds = new Map(); // bizim maç id → {sport, iddaaId}
+const liveLast = { football: 0, basketball: 0 }; // son deneme (ms)
+let liveBusy = false, liveTimer = null;
+function liveOn() {
+  try { return localStorage.getItem(LIVE_STORE) !== "0"; } catch { return true; }
+}
+function setLiveOn(on) {
+  try { if (on) localStorage.removeItem(LIVE_STORE); else localStorage.setItem(LIVE_STORE, "0"); } catch { /* kayıt alanı kapalı */ }
+  if (on) pollLive(); else { clearTimeout(liveTimer); liveTimer = null; }
+}
+function loadLiveStatus() {
+  try { const v = JSON.parse(localStorage.getItem(LIVE_DURUM)); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+}
+function saveLiveStatus(st) {
+  try { localStorage.setItem(LIVE_DURUM, JSON.stringify(st)); } catch { /* yok sayılır */ }
+}
+/* Canlı olabilecek maçlar: resmi skoru yok, başlama − 10 dk … + 3 sa (futbol) / + 3,5 sa (basketbol). */
+function liveCandidates(sport, nowMs) {
+  return (DATA[sport] || []).flatMap((d) => d.matches).filter((m) => {
+    const k = Date.parse(m.kickoff);
+    return m.score == null && nowMs >= k - 10 * 60 * 1000 && nowMs <= k + LIVE_WINDOW_MS[sport];
+  });
+}
+/* Maçın canlı görünümü (Live.view) ya da null (eşleşmedi, tabloda yok, resmi skoru var). */
+function liveOf(matchId) {
+  const x = state.liveIds.get(matchId), ref = byId.get(matchId);
+  if (!x || (ref && ref.match.score != null) || !liveOn()) return null;
+  return Live.view(state.live[x.sport], x.iddaaId, x.sport);
+}
+function liveDelay(sport) {
+  const ids = [...state.liveIds.values()].filter((x) => x.sport === sport).map((x) => x.iddaaId);
+  return Live.delay(state.live[sport], ids, sport);
+}
+async function fetchLive(sport, cands, st) {
+  const t0 = state.live[sport], now = Date.now();
+  const ids = [...state.liveIds.values()].filter((x) => x.sport === sport).map((x) => x.iddaaId);
+  const version = Live.needsFull(t0, now, ids, sport) ? 0 : t0.version;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), IDDAA_TIMEOUT_MS);
+  let res;
+  try { res = await fetch(Live.url(sport, version), { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", signal: ctrl.signal }); } finally { clearTimeout(timer); }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const p = Live.parse(await res.json());
+  if (!p.ok) { state.live[sport] = { ...t0, version: 0 }; throw new Error("Biçim değişti"); } // sonraki tur tam istek
+  const t = (state.live[sport] = Live.merge(t0, p, Date.now()));
+  // eşleme (§34 ile aynı): olayı tablodaki maçlar; bir kez eşlenen maç tabloda olayı silinse de eşli kalır
+  const mt = Bulletin.match(Object.values(t.events), cands, DATA.iddaa_map, sport);
+  for (const { ev, match } of mt.pairs) state.liveIds.set(match.id, { sport, iddaaId: ev.id });
+  // görülen durum kodları (ilk NBA gecesi kontrolü, §37)
+  const codes = (st.codes = st.codes || {});
+  for (const s of Object.values(p.scores)) {
+    const k = String(s.code);
+    if (!(k in codes) && !Live.KNOWN[sport].includes(s.code)) console.info(`iddaa canlı: tanınmayan durum kodu ${k} (${sport})`);
+    codes[k] = (codes[k] || 0) + 1;
+  }
+  Object.assign(st, { lastOk: new Date().toISOString(), error: null, errorAt: null, matched: mt.pairs.length });
+  // biten maçlar → oynanmış kuponlara geçici sonuç
+  const items = [], back = [], at = new Date().toISOString();
+  for (const [id, x] of state.liveIds) {
+    if (x.sport !== sport) continue;
+    const v = Live.view(t, x.iddaaId, sport);
+    if (v && v.state === "ended" && v.settleScore) items.push({ id, score: v.settleScore, certain: v.certain });
+    else if (v && (v.state === "live" || v.state === "ht")) back.push(id); // muhtemel bitti sayılmıştı ama yeniden canlı
+  }
+  const w = back.length ? History.withdrawProvisional(state.history, back, at) : 0;
+  const a = items.length ? History.applyProvisional(state.history, items, at) : 0;
+  if (w || a) saveHistory();
+}
+async function pollLive() {
+  clearTimeout(liveTimer);
+  liveTimer = null;
+  if (liveBusy || !DATA || !DATA.iddaa_map || !liveOn() || document.visibilityState !== "visible") return;
+  liveBusy = true;
+  let fetched = false;
+  try {
+    const status = loadLiveStatus();
+    for (const sport of LIVE_SPORTS) {
+      const now = Date.now(), cands = liveCandidates(sport, now);
+      if (!cands.length || now - liveLast[sport] < liveDelay(sport) - 1000) continue;
+      liveLast[sport] = now;
+      const st = (status[sport] = status[sport] || {});
+      try { await fetchLive(sport, cands, st); fetched = true; } catch (e) { st.error = feedError(e); st.errorAt = new Date().toISOString(); }
+    }
+    saveLiveStatus(status);
+  } finally { liveBusy = false; }
+  if (fetched) liveRerender();
+  scheduleLive();
+}
+/* Sonraki tur: aday maçı olan sporların kalan süresinin en kısası; aday yoksa zamanlayıcı kurulmaz. */
+function scheduleLive() {
+  clearTimeout(liveTimer);
+  liveTimer = null;
+  if (!liveOn() || document.visibilityState !== "visible") return;
+  const now = Date.now();
+  const waits = LIVE_SPORTS.filter((sp) => liveCandidates(sp, now).length).map((sp) => Math.max(1000, liveLast[sp] + liveDelay(sp) - now));
+  if (!waits.length) { // aday yok: sayfa açık kalırsa ilk maçın penceresi açılınca uyan
+    const wake = Live.wakeAt(LIVE_SPORTS.flatMap((sp) => (DATA[sp] || []).flatMap((d) => d.matches)
+      .filter((m) => m.score == null).map((m) => Date.parse(m.kickoff))), now);
+    if (wake != null) waits.push(Math.min(wake - now + 1000, 2 ** 31 - 1));
+  }
+  if (waits.length) liveTimer = setTimeout(pollLive, Math.min(...waits));
+}
+/* Canlı veri değişti: açık ekranı yeniden çiz, kaydırma yerini koru; yazı yazılırken çizme. */
+function liveRerender() {
+  // yazı yazılırken ya da seçim kutusu açıkken çizme (odak kaybolmasın); sonraki turda çizilir
+  if (document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+  const r = resolveRoute(location.hash);
+  if (!["today", "match", "kupon", "history", "historyDetail"].includes(r.view)) { refreshSide(); return; }
+  const view = document.getElementById("view"), detail = document.getElementById("detail");
+  const y = window.scrollY, vy = view.scrollTop, dy = detail.scrollTop;
+  listKey = null;
+  detail.dataset.id = "";
+  route();
+  window.scrollTo(0, y);
+  view.scrollTop = vy;
+  detail.scrollTop = dy;
+}
+/* Geçmiş > Ayarlar: canlı skor anahtarı, son çekim, hata, görülen durum kodları. */
+function liveSection(render) {
+  const on = liveOn(), st = loadLiveStatus();
+  const sportLine = (sport, name) => {
+    const x = st[sport] || {};
+    const codes = Object.entries(x.codes || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
+    return h("div", { class: "feed-st row" }, h("b", {}, name),
+      h("span", {}, x.lastOk ? `Son çekim: ${fmtDateTime(x.lastOk)} · ${x.matched || 0} maç eşleşti` : "Henüz çekim yok"),
+      x.error ? h("span", { class: "bad" }, `Son hata: ${x.error}${x.errorAt ? ` (${fmtDateTime(x.errorAt)})` : ""}`) : null,
+      codes.length ? h("span", { class: "muted" }, "Görülen durum kodları: ", codes.map(([k, c]) =>
+        `${k}×${c}${Live.KNOWN[sport].includes(Number(k)) ? "" : " (tanınmıyor)"}`).join(", ")) : null);
+  };
+  return sec("Canlı skor",
+    card(
+      h("div", { class: "set-row row" }, h("span", {}, "Canlı skoru göster"),
+        segmented("Canlı skoru göster", [["on", "Açık"], ["off", "Kapalı"]], on ? "on" : "off",
+          (v) => { setLiveOn(v === "on"); render(); }, "sm")),
+      on ? [sportLine("football", "Futbol"), sportLine("basketball", "NBA")] : null),
+    h("p", { class: "sec-note" }, "Canlı skor iddaa'dan bu cihaza, sayfa açıkken ve canlı maç varken en fazla 45 saniyede bir çekilir ",
+      "(maç bitmek üzereyse 15 saniyede bir). Biten maçın skoru kuponu geçici sonuçlandırır; resmi sonuç sabah gelir. ",
+      "Tanınmayan durum kodu görülen maçta skor görünür ama kupon sonuçlandırılmaz."));
+}
+
 /* ---------- kupon geçmişi (localStorage, §27) ---------- */
 function loadHistory() {
   let raw = null;
@@ -603,12 +752,14 @@ function matchRow(m) {
   const vals = probs3(m, "prob"); // sitede gösterilen (diğer ligler: model)
   const top = vals ? Math.max(...vals) : null;
   const e = edgeOf(m), live = started(m);
-  const label = `${fmtTime(m.kickoff)}${live ? ", başladı" : ""}. ${m.home} – ${m.away}. `
+  const lv = liveOf(m.id), lvOn = lv && lv.state !== "gone"; // §37 canlı skor
+  const label = `${lvOn ? `${liveWord(lv)}, ${dash(lv.score)}` : `${fmtTime(m.kickoff)}${live ? `, ${lv ? "sonuç bekleniyor" : "başladı"}` : ""}`}. ${m.home} – ${m.away}. `
     + (vals ? outs.map((k, i) => `${SHORT[k]} %${Math.round(vals[i] * 100)}`).join(", ") : "Olasılık yok")
     + (e ? `. ${edgeText(e)} puan` : "");
   return h("a", { class: "mrow row", href: `#/mac/${encodeURIComponent(m.id)}`, "aria-label": label },
     h("div", { class: outs.length === 2 ? "mrow-top two" : "mrow-top", "aria-hidden": "true" },
-      h("span", { class: live ? "time live" : "time" }, fmtTime(m.kickoff), live ? h("small", {}, "başladı") : null),
+      lvOn ? h("span", { class: "time live score" }, dash(lv.score), h("small", {}, lv.label))
+        : h("span", { class: live ? "time live" : "time" }, fmtTime(m.kickoff), live ? h("small", {}, lv ? "sonuç bekleniyor" : "başladı") : null),
       h("div", { class: "teams" }, ["home", "away"].map((s) => h("span", { class: "team" }, crest(m, s), h("span", { class: "nm" }, m[s])))),
       vals ? vals.map((p) => h("span", { class: p === top ? "p3 top" : "p3" }, Math.round(p * 100)))
         : outs.map(() => h("span", { class: "p3" }, "–"))),
@@ -714,7 +865,12 @@ function viewMatch(root, id, from, opts) {
     return r ? `${r["Sıra"]}. sıra` : null;
   };
   const e = m.expected, done = isDone(m), past = !nba && !e;
-  const mid = done ? h("div", { class: "mid" }, h("small", {}, "Skor"),
+  const lv = done ? null : liveOf(m.id); // §37
+  const mid = lv ? h("div", { class: "mid" }, h("small", {}, lv.state === "ended" ? (lv.certain ? "Bitti (geçici)" : "Muhtemelen bitti")
+        : lv.state === "gone" ? "Sonuç bekleniyor" : `Canlı · ${lv.label}`),
+      h("span", { class: "xg", "aria-label": `${m.home} ${lv.score.split("-")[0]}, ${m.away} ${lv.score.split("-")[1]}` }, dash(lv.score)),
+      lv.state === "ended" || lv.state === "gone" ? h("small", {}, "iddaa skoru; resmi sonuç sabah") : null)
+    : done ? h("div", { class: "mid" }, h("small", {}, "Skor"),
       h("span", { class: "xg", "aria-label": `${m.home} ${m.score.split("-")[0]}, ${m.away} ${m.score.split("-")[1]}` }, m.score.replace("-", "–")))
     : past ? h("div", { class: "mid" }, h("small", {}, "Sonuç"), h("span", { class: "xg sm" }, "–"))
     : nba
@@ -726,7 +882,7 @@ function viewMatch(root, id, from, opts) {
   const tabs = past || done ? MTABS.football.filter(([k]) => k !== "goals") : MTABS[nba ? "basketball" : "football"];
   const tab = tabs.some(([k]) => k === state.mtab.tab) ? state.mtab.tab : "result";
   const head = h("header", { class: "mhead" },
-    h("p", { class: "meta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`, done ? " · bitti" : started(m) ? " · başladı" : ""),
+    h("p", { class: "meta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`, done ? " · bitti" : lv && (lv.state === "live" || lv.state === "ht") ? " · canlı" : started(m) ? " · başladı" : ""),
     h("h1", { class: "sr" }, matchLabel(m)),
     h("div", { class: "versus" }, side("home"), mid, side("away")),
     m.report ? karneCard(m) : null,
@@ -1429,9 +1585,10 @@ function viewOptions(root) {
   kids.push(filterBar(f, all, list.length, change, clear));
   if (!all.length) kids.push(padCard(h("p", { class: "muted" }, "Şu an gösterilecek seçenek yok.")));
   else if (!list.length) {
-    // çifte şansın yurtdışı oranı yok: iddaa oranı çekilmemişse satır çıkamaz
-    const dcNoIddaa = f.market === "double" && f.sport !== "basketball" && !iddaaCtx("football").fetched;
-    kids.push(padCard(h("p", { class: "muted" }, dcNoIddaa ? "Çifte şans için iddaa oranı gerekiyor." : "Bu filtrelere uyan seçenek yok."),
+    // çifte şansın ve KG'nin yurtdışı oranı yok: iddaa oranı çekilmemişse satır çıkamaz
+    const noIddaaName = { double: "Çifte şans", btts: "KG" }[f.market];
+    const noIddaa = noIddaaName && f.sport !== "basketball" && !iddaaCtx("football").fetched;
+    kids.push(padCard(h("p", { class: "muted" }, noIddaa ? `${noIddaaName} için iddaa oranı gerekiyor.` : "Bu filtrelere uyan seçenek yok."),
       Options.activeCount(f) ? h("button", { type: "button", class: "btn sm secondary", onclick: clear }, "Filtreleri temizle") : null));
   } else {
     kids.push(WIDE.matches ? optionTable(shown, f, change, render) : card(shown.map((r) => optionItem(r, render))));
@@ -1518,6 +1675,7 @@ function viewKupon(root) {
     return h("div", { class: "kleg row" },
       h("div", { class: "info" }, h("span", { class: "pick" }, l.pick),
         h("span", { class: "meta" }, `${l.match} · ${fmtShortWhen(l.kickoff)}`),
+        liveLegLine(l),
         ist ? h("span", { class: "meta bad-t", style: "font-weight:600" }, `Uyarı: ${ist}`) : null,
         h("span", { class: "meta" }, `Olasılık ${pct(l.prob)}${legModel(l) ? " (model)" : ""} · `,
           lab ? h("span", { class: lab.band === "value" ? "good-t" : lab.band === "low" ? "bad-t" : null, style: "font-weight:600" }, lab.text)
@@ -1714,6 +1872,42 @@ function couponCard(day, kind, title, desc) {
 const STATUS = { won: ["Tuttu", "good"], lost: ["Yattı", "bad"], void: ["İade", "plain"], pending: ["Bekliyor", "muted"] };
 const RESULT_NAMES = { won: "Tuttu", lost: "Yattı", void: "İade" };
 const statusBadge = (st) => badge(STATUS[st][0], STATUS[st][1]);
+/* §37 canlı skor: seçim ve kupon durumu. Resmi/elle sonuç her zaman önce (History.settle). */
+const dash = (sc) => String(sc).replace("-", "–");
+const liveWord = (v) => (v.state === "ended" ? (v.certain ? "Bitti (geçici)" : "Muhtemelen bitti") : v.state === "ht" ? v.label : `Canlı ${v.label}`);
+const LIVE_RES = { won: ["Tutuyor", "Tuttu", "good"], lost: ["Yatıyor", "Yattı", "bad"], void: ["İade", "İade", "plain"] };
+function liveLegBadge(ls) {
+  if (!ls) return null;
+  const [now, done, cls] = LIVE_RES[ls.result];
+  return badge(ls.decided ? `${done}${ls.provisional ? (ls.certain ? " (geçici)" : " (muhtemel)") : ""}` : now, cls, "xs");
+}
+function liveLegText(v) {
+  if (v.state === "ended") {
+    const t = v.certain ? `Bitti · ${dash(v.score)} (iddaa)` : `Muhtemelen bitti · son skor ${dash(v.score)}`;
+    return v.settleScore ? t : `${t} · durum kodu tanınmadı, sonuç sabah`;
+  }
+  if (v.state === "gone") return `Sonuç bekleniyor · son skor ${dash(v.score)}`;
+  return `${v.label} · ${dash(v.score)}`;
+}
+/* Seçimin canlı satırı (Kuponum, Geçmiş): rozet + dakika/skor; maç canlı değilse null. */
+function liveLegLine(l) {
+  const v = liveOf(l.matchId);
+  if (!v || l.manual || l.status) return null;
+  return h("span", { class: "meta live-line" }, liveLegBadge(Live.legState(l.key, v)), " ", liveLegText(v));
+}
+/* Kupon rozeti: sonuçlanmış (geçici/muhtemel işaretli) ya da bekleyen kuponda canlı özet. */
+function couponBadge(c, r) {
+  if (r.status !== "pending") {
+    const [txt, cls] = STATUS[r.status];
+    return badge(r.provisional ? `${txt} (${r.probable ? "muhtemel" : "geçici"})` : txt, cls);
+  }
+  const states = c.legs.map((l) => (l.manual || l.status ? null : Live.legState(l.key, liveOf(l.matchId))));
+  const now = Live.couponNow(states);
+  if (now.now === "lost") return badge("Şu an yatıyor", "bad");
+  if (now.now === "won") return badge("Şu an tutuyor", "good");
+  if (now.now === "partial") return badge(`${now.ok}/${now.total} seçim tutuyor`, "plain");
+  return statusBadge("pending");
+}
 const rate = (x) => (x == null ? "–" : `%${Math.round(x * 100)}`);
 const signedTL = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${fmtMoney(Math.abs(Math.round(x * 100) / 100))} TL`;
 const netCls = (x) => (x > 0 ? "good-t" : x < 0 ? "bad-t" : null);
@@ -1772,7 +1966,7 @@ function couponRow(c) {
     h("div", { class: "info" },
       h("span", { class: "ttl" }, History.TYPE_NAMES[c.type] || c.type, c.unverified ? badge("Oran doğrulanmadı", "warn", "xs") : null),
       h("span", { class: "meta" }, `${fmtDay(c.playedAt)} · ${c.legs.length} seçim · oran ${odds(c.totalOdds)} · ${fmtMoney(c.stake)} TL`)),
-    h("div", { class: "r" }, manual ? badge("Elle sonuçlandır", "warn") : statusBadge(r.status), net),
+    h("div", { class: "r" }, manual ? badge("Elle sonuçlandır", "warn") : couponBadge(c, r), net),
     h("span", { class: "chev" }, icon("chev", 16, 2.2)));
 }
 function settingsSection(render) {
@@ -1864,10 +2058,14 @@ function viewHistory(root) {
   } else {
     const hleft = [summaryCard(History.summarize(shown), History.calibration(shown)), sec("Kupon tipine göre", typeRows(shown))];
     const unv = shown.filter((c) => c.unverified).length;
+    if (shown.some((c) => History.settle(c).provisional)) {
+      hleft.push(h("p", { class: "sec-note" }, "Geçici sonuçlar (iddaa canlı skoru) dahil; resmi sonuç sabah gelince o geçerli olur."));
+    }
     kids.push(twoCol(hleft, [sec("Kuponlar", card(shown.map(couponRow)),
       unv ? h("p", { class: "sec-note" }, `${unv} kupon iddaa oranı girilmeden kaydedildi ("Oran doğrulanmadı"); kazançları gerçek iddaa oranıyla farklı olabilir.`) : null)]));
   }
   kids.push(iddaaFeedSection(render));
+  kids.push(liveSection(render));
   kids.push(settingsSection(render));
   kids.push(h("p", { class: "foot" }, "Sonuçlar maç bittikten sonraki sabah güncellemesiyle gelir (son 7 gün). Ertelenen, iptal edilen ",
     "ya da uzatmaya giden maçlar ve LFA'da olmayan maçlar (NBA, Konferans Ligi, milli maçlar) elle sonuçlandırılır."));
@@ -1880,6 +2078,11 @@ function legStatusText(l) {
   if (l.status === "postponed") return "Ertelendi — iddaa kuralına göre elle sonuçlandır";
   if (l.status === "cancelled") return "İptal — iddaa kuralına göre elle sonuçlandır";
   if (l.status === "aet") return `Uzatmaya gitti (${l.score}) — 90 dakika sonucuna göre elle sonuçlandır`;
+  if (History.legProvisional(l)) { // §37 iddaa canlı skoru
+    const res = RESULT_NAMES[History.legFromScore(l.key, l.prov.score)];
+    return `${l.prov.certain ? `Bitti · skor ${dash(l.prov.score)}` : `Muhtemelen bitti · son skor ${dash(l.prov.score)}`} (iddaa) → `
+      + `${res} (${l.prov.certain ? "geçici" : "muhtemel"}) · resmi sonuç bekleniyor`;
+  }
   return new Date(l.kickoff) <= new Date() ? "Sonuç bekleniyor" : "Oynanmadı";
 }
 function viewHistoryDetail(root, id) {
@@ -1893,9 +2096,12 @@ function viewHistoryDetail(root, id) {
   const choice = (l, val, label) => h("button", { type: "button", "aria-pressed": (l.manual || null) === val,
     onclick: () => { l.manual = val; touch(); } }, label);
   const net = r.payout == null ? null : r.payout - c.stake;
-  root.replaceChildren(top,
+  root.replaceChildren(...[top,
     h("header", { class: "hd tight", style: "padding-top:4px" }, h("h1", { class: "title" }, "Oynanan kupon"),
-      h("div", { class: "title-row" }, h("span", { class: "lede" }, fmtDateTime(c.playedAt)), statusBadge(r.status))),
+      h("div", { class: "title-row" }, h("span", { class: "lede" }, fmtDateTime(c.playedAt)), couponBadge(c, r))),
+    r.provisional ? h("p", { class: "alert warn" }, h("b", {}, r.probable ? "Muhtemel sonuç: " : "Geçici sonuç: "),
+      r.probable ? "bir maç iddaa'da bitiş kodu görülmeden listeden düştü; son skora göre sonuçlandı. " : "iddaa'nın canlı skoruna göre. ",
+      "Resmi sonuç sabah gelince o geçerli olur.") : null,
     c.unverified ? h("p", { class: "alert warn" }, h("b", {}, "Oran doğrulanmadı: "),
       "bazı seçimlerin iddaa oranı girilmeden kaydedildi; oran ve kazanç yurtdışı ya da adil orana göre.") : null,
     h("div", { class: "card pad" },
@@ -1914,7 +2120,8 @@ function viewHistoryDetail(root, id) {
       h("div", { class: "info" }, h("span", { class: "pick" }, l.pick),
         h("span", { class: "meta" }, `${l.match} · ${fmtDateTime(l.kickoff)}`),
         h("span", { class: "meta" }, `Oran ${odds(l.price)}${l.fair ? " (adil)" : ""}${l.verified === false ? " (doğrulanmadı)" : ""} · olasılık ${pct(l.prob)}`),
-        h("span", { class: History.needsManual(l) ? "meta warn-t" : "meta", style: History.needsManual(l) ? "font-weight:600" : null }, legStatusText(l))),
+        h("span", { class: History.needsManual(l) ? "meta warn-t" : "meta", style: History.needsManual(l) ? "font-weight:600" : null }, legStatusText(l)),
+        History.legProvisional(l) ? null : liveLegLine(l)),
       h("div", { class: "seg sm", role: "group", "aria-label": `${l.pick} sonucu` },
         choice(l, null, "Otomatik"), choice(l, "won", "Tuttu"), choice(l, "lost", "Yattı"), choice(l, "void", "İade"))))),
       h("p", { class: "sec-note" }, "\"Otomatik\" maç skoruna göre sonuçlandırır; elle seçtiğin sonuç her zaman önce gelir. ",
@@ -1923,7 +2130,7 @@ function viewHistoryDetail(root, id) {
       if (!confirm("Bu kupon geçmişten silinsin mi? Geri alınamaz (yedeğin yoksa).")) return;
       state.history.coupons = state.history.coupons.filter((x) => x.id !== c.id);
       if (saveHistory()) { toast("Kupon silindi"); location.hash = "#/gecmis"; }
-    } }, "Kuponu sil"));
+    } }, "Kuponu sil")].filter(Boolean)); // null çocuk "null" metni olarak yazılmasın
 }
 
 /* ---------- görünüm: Performans ---------- */
@@ -2320,6 +2527,8 @@ async function init() {
   route();
   refreshIddaaFeed(); // §34 beklemeden; en fazla 2 saatte bir
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshIddaaFeed(); });
+  pollLive(); // §37 canlı maç yoksa istek atmaz
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pollLive(); else clearTimeout(liveTimer); });
 }
 
 /* ---------- PWA: bağlantı bandı ve service worker güncellemesi ---------- */
