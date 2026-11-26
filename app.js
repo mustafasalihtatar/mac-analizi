@@ -158,7 +158,7 @@ function svg(tag, attrs, ...kids) {
 /* İnce çizgili ikonlar (24×24, currentColor). */
 const ICONS = {
   back: ["M15 5l-7 7 7 7"], chev: ["M9 5l7 7-7 7"], share: ["M12 3v13M7 8l5-5 5 5M5 13v7h14v-7"],
-  plus: ["M12 5v14M5 12h14"], check: ["M5 12.5l4.5 4.5L19 7.5"], trend: ["M3 17l5-5 4 3 8-9"],
+  plus: ["M12 5v14M5 12h14"], down: ["M6 9l6 6 6-6"], check: ["M5 12.5l4.5 4.5L19 7.5"], trend: ["M3 17l5-5 4 3 8-9"],
 };
 function icon(name, size, sw) {
   const s = svg("svg", { width: size || 22, height: size || 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
@@ -700,7 +700,8 @@ function shareBtn(m) {
 }
 function viewMatch(root, id, from, opts) {
   const wide = !!(opts && opts.wide); // masaüstü sağ sütun: geri bağlantısı yok, liste solda duruyor
-  const back = wide ? h("span") : from === "value" ? backLink("#/degerli", "Değerli") : backLink("#/", "Bugün");
+  const back = wide ? h("span") : from === "value" ? backLink("#/degerli", "Değerli")
+    : from === "options" ? backLink("#/degerli/tum", "Tüm seçenekler") : backLink("#/", "Bugün");
   const ref = byId.get(id);
   const top = h("div", { class: "topnav" }, back, ref ? shareBtn(ref.match) : null);
   if (!ref) { root.replaceChildren(top, h("p", { class: "empty" }, "Maç bulunamadı; veriler güncellenmiş olabilir.")); return; }
@@ -864,7 +865,8 @@ function optRow(m, o, render, opts) {
     : `${big ? "" : `${blendDiff ? `Harman ${pct(o.prob)}` : pct(o.prob)}${o.model_prob != null ? ` (model ${pct(o.model_prob)})` : ""} · `}Adil ${odds(o.fair)} · Yurtdışı ${o.price ? odds(o.price) : "–"}`;
   const can = o.addable || minor;
   const inK = inKupon(o.key);
-  // Kupona eklenemeyen seçenek (çifte şans, çeyrek çizgi): düğme yok, iddaa oranı ve beklenen değer yine çalışır
+  // Kupona eklenemeyen seçenek (çeyrek çizgi): düğme yok, iddaa oranı ve beklenen değer yine çalışır. Çifte şans eklenir
+  // (§36: skordan sonuçlanır; yurtdışı oranı yok, adil oranla girer, iddaa oranı varsa o geçer)
   const add = can ? h("button", { type: "button", class: "add-btn", "aria-pressed": inK,
     "aria-label": `${o.pick}: ${inK ? "kupondan çıkar" : "kupona ekle"}`,
     onclick: () => { toggleOption(m, o); render(); } },
@@ -1190,7 +1192,7 @@ function viewValue(root) {
   const v = DATA.value;
   const render = () => viewValue(root);
   const thr = v ? Math.round(v.threshold * 100) : 4;
-  const head = (seg) => h("header", { class: "hd" }, h("h1", { class: "title" }, "Değerli"),
+  const head = (seg) => h("header", { class: "hd" }, h("h1", { class: "title" }, "Değerli"), valueListSeg("value"),
     h("p", { class: "lede" }, `Modelin piyasadan en az ${thr} puan ayrıldığı seçenekler. Kazanç garantisi değildir.`), seg);
   if (!v) { root.replaceChildren(head(null), h("p", { class: "empty" }, "Bu yayında liste yok."), note()); return; }
   const { rows, minor } = Value.build(v.picks, state.iddaa, (id) => (byId.get(id) || {}).match, new Date());
@@ -1247,6 +1249,201 @@ function valueTracking(v) {
         "ortalama olasılığı (iadeler hariç). Model piyasadan iyiyse Tuttu, Piyasa'dan yüksek çıkar. Birim kazanç: listeye ",
         "girdiği andaki yurtdışı oranla, seçenek başına 1 birim.")),
     !t.reliable ? h("p", { class: "opt-sub" }, `En az ${goal} sonuçlanmış seçenek gerekli; bu kadar az seçenekte tutma oranı çoğunlukla şanstır.`) : null));
+}
+
+/* ---------- görünüm: Değerli > Tüm seçenekler (§36) ----------
+   Modelin olasılık verdiği her seçenek (options.js), iddaa oranıyla (yoksa yurtdışı). Filtreler bu cihazda hatırlanır
+   (macanaliz.filtre.v1). Masaüstünde sıralanabilir tablo. */
+const OPT_PAGE = 50;
+const MARKET_NAMES = [["all", "Pazar: tümü"], ["result", "Sonuç"], ["double", "Çifte şans"], ["totals", "Gol (alt/üst)"],
+  ["btts", "KG"], ["handicap", "Handikap"]];
+const SORT_NAMES = { value: "değer", odds: "oran", time: "saat", gap: "fark", match: "maç", pick: "seçim", required: "gereken", prob: "tahmin" };
+const SRC_CLS = { iddaa: "auto", elle: "man", "yurtdışı": "ext" };
+const BAND_CLS = { value: "good", low: "bad", fair: "plain", model: "muted" };
+function loadFilters() {
+  try { return Options.parseFilters(localStorage.getItem(Options.STORE)); } catch { return Options.defaults(); }
+}
+function saveFilters(f) {
+  try { localStorage.setItem(Options.STORE, Options.serializeFilters(f)); } catch { /* gizli sekme: bu oturumda bellekte */ }
+}
+/* Gösterilen 3 günün (bugün, yarın, sonraki gün) maçlarından satırlar. Diğer ligler futbol altında. */
+function optionRows() {
+  const dayOf = new Map(), all = [];
+  for (const sp of ["football", "basketball", "minor"]) {
+    for (const d of DATA[sp] || []) {
+      const off = dayOffset(d, sp === "basketball" ? "basketball" : "football");
+      if (off < 0 || off > 2) continue;
+      for (const m of d.matches) { dayOf.set(m.id, off); all.push(m); }
+    }
+  }
+  return Options.collect(all, {
+    now: new Date(),
+    dayOf: (m) => (dayOf.has(m.id) ? dayOf.get(m.id) : null),
+    extra: (m) => optsOf(m).filter((o) => o.extra),
+    price: (m, o) => iddaaOf(m.id, o.key),
+    source: (m, o) => Iddaa.source(state.iddaa, m.id, o.key),
+    status: (m, o) => legIddaa(m.id, o.key, m.kickoff),
+  });
+}
+/* Yerel <select> çip: items [[değer, metin]]; on: varsayılandan farklı (limon kenar). */
+function fselect(label, value, items, onPick, on) {
+  const sel = h("select", { class: "fsel", "aria-label": label, onchange: (e) => onPick(items[e.target.selectedIndex][0]) },
+    items.map(([v, t]) => h("option", { value: String(v), selected: v === value }, t)));
+  return h("span", { class: `chip fchip${on ? " on" : ""}` }, sel, icon("down", 14, 2.2));
+}
+const ftoggle = (text, pressed, onClick) => h("button", { type: "button", class: `chip${pressed ? " on" : ""}`, "aria-pressed": pressed,
+  onclick: onClick }, text);
+const dayNames = (sport) => {
+  const third = weekday(ymd(new Date(Date.now() + 2 * 86400000 - (sport === "basketball" ? 8 * 3600 * 1000 : 0))));
+  return sport === "basketball" ? ["Bu gece", "Yarın gece", `${cap1(third)} gecesi`] : ["Bugün", "Yarın", cap1(third)];
+};
+/* Filtre çubuğu (mobilde yatay kayar, masaüstünde tek satır) + sonuç sayısı ve temizle. */
+function filterBar(f, rows, n, change, clear) {
+  const d = Options.defaults();
+  const presets = Options.MIN_ODDS_PRESETS;
+  const custom = state.oCustom || (f.minOdds != null && !presets.includes(f.minOdds));
+  const oddsItems = [[null, "Oran: sınırsız"], ...presets.map((p) => [p, `Oran ≥ ${odds(p)}`]),   // elle modda çip uygulanan değeri gösterir (geçersiz yazı uygulanmaz, önceki geçerli değer kalır)
+    ["custom", f.minOdds == null ? "Oran: elle · sınırsız" : `Oran ≥ ${odds(f.minOdds)} · elle`]];
+  const kids = [
+    fselect("En düşük oran", custom ? "custom" : f.minOdds, oddsItems, (v) => {
+      if (v === "custom") { state.oCustom = true; change({}); return; }
+      state.oCustom = false; change({ minOdds: v });
+    }, f.minOdds != null || custom),
+  ];
+  if (custom) {
+    const err = h("span", { class: "finp-err", id: "finp-err", role: "alert", hidden: true }, "Geçersiz oran");
+    const wrap = h("span", { class: "chip fchip on finp-wrap" });
+    const invalid = (on) => {
+      wrap.classList.toggle("bad", on);
+      err.hidden = !on;
+      if (on) inp.setAttribute("aria-invalid", "true"); else inp.removeAttribute("aria-invalid");
+    };
+    const inp = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", class: "inp finp",
+      "aria-label": "En düşük oran (elle)", "aria-describedby": "finp-err", placeholder: "1,65",
+      value: f.minOdds == null ? "" : odds(f.minOdds),
+      oninput: () => invalid(false),
+      onchange: (e) => {
+        const t = e.target.value.trim();
+        if (!t) { change({ minOdds: null }); return; }
+        const v = Iddaa.parseOdds(t);
+        if (v == null) { invalid(true); return; } // uygulanmaz; çip önceki geçerli değeri gösterir
+        change({ minOdds: v });
+      } });
+    wrap.append(inp, err);
+    kids.push(wrap);
+  }
+  const dn = dayNames(f.sport);
+  kids.push(
+    ftoggle("Sadece değerliler", f.onlyValue, () => change({ onlyValue: !f.onlyValue })),
+    fselect("Pazar", f.market, MARKET_NAMES, (v) => change({ market: v }), f.market !== d.market),
+    fselect("Spor", f.sport, [["all", "Spor: tümü"], ["football", "Futbol"], ["basketball", "Basketbol"]], (v) => change({ sport: v }),
+      f.sport !== d.sport),
+    fselect("Lig", f.league, [["all", "Tüm ligler"], ...Options.leagues(rows, f).map((l) => [l, l])], (v) => change({ league: v }),
+      f.league !== d.league),
+    fselect("Gün", f.day, [["all", "Gün: tümü"], [0, dn[0]], [1, dn[1]], [2, dn[2]]], (v) => change({ day: v }), f.day !== d.day),
+    fselect("Sıralama", f.sort.by, ["value", "odds", "time", "gap"].concat(["value", "odds", "time", "gap"].includes(f.sort.by) ? [] : [f.sort.by])
+      .map((k) => [k, `Sırala: ${SORT_NAMES[k]}`]), (v) => change({ sort: { by: v, dir: Options.SORTS[v] } }), false),
+    ftoggle("Kapalıları göster", f.showClosed, () => change({ showClosed: !f.showClosed })));
+  const k = Options.activeCount(f);
+  return h("div", { class: "fwrap" },
+    h("div", { class: "chips fbar", role: "group", "aria-label": "Filtreler" }, kids),
+    h("div", { class: "fcount", "aria-live": "polite" },
+      h("span", {}, `${n} seçenek${k ? ` · ${k} filtre` : ""}`),
+      k ? h("button", { type: "button", class: "linkbtn", onclick: clear }, "Filtreleri temizle") : null));
+}
+function addBtnFor(r, render) {
+  const ref = byId.get(r.match);
+  if (!r.addable || !ref) return h("span", { class: "opt-req" }, "kupona eklenmez");
+  const inK = inKupon(r.key);
+  return h("button", { type: "button", class: "add-btn", "aria-pressed": inK, "aria-label": `${r.pick}: ${inK ? "kupondan çıkar" : "kupona ekle"}`,
+    onclick: () => { toggleOption(ref.match, r.option); render(); } }, icon(inK ? "check" : "plus", 16, 2.4), inK ? "Kuponda" : "Kupona ekle");
+}
+const valueBadge = (r) => {
+  const lab = r.ev == null ? null : evText(r.ev, r.unverified);
+  return lab ? badge(lab.text, BAND_CLS[r.band], "xs") : null;
+};
+const srcTag = (r) => h("span", { class: `src ${SRC_CLS[r.src] || ""}` }, r.src);
+const matchLink = (r) => h("a", { class: "vmatch", href: `#/mac/${encodeURIComponent(r.match)}` }, `${r.home} – ${r.away}`, " ›");
+const reqText = (r) => `gereken ${pct(r.required)} · tahmin ${pct(r.prob)}${r.unverified ? " (doğrulanmamış)" : ""}`;
+function optionItem(r, render) {
+  return h("div", { class: "orow row" },
+    h("div", { class: "orow-main" },
+      h("div", { class: "orow-top" }, h("span", { class: "vpick" }, r.pick), valueBadge(r)),
+      matchLink(r),
+      h("span", { class: "opt-sub" }, `${fmtShortWhen(r.kickoff)} · ${r.competition}`),
+      h("span", { class: "opt-req" }, reqText(r))),
+    h("div", { class: "orow-side" },
+      h("span", { class: "oodds" }, h("b", { class: "num" }, odds(r.price)), srcTag(r)),
+      addBtnFor(r, render)));
+}
+/* Masaüstü tablosu: başlığa tıklayınca sıralama (aynı başlık → yön ters). */
+function optionTable(rows, f, change, render) {
+  const cols = [["match", "Maç"], ["pick", "Seçim"], ["odds", "Oran", "r"], ["required", "Gereken", "r"], ["prob", "Tahmin", "r"],
+    ["value", "Değer"]];
+  const th = ([by, label, cls]) => {
+    const on = f.sort.by === by;
+    return h("th", { class: cls || null, "aria-sort": on ? (f.sort.dir === "asc" ? "ascending" : "descending") : null, scope: "col" },
+      h("button", { type: "button", class: "thbtn", onclick: () => change({ sort: Options.toggleSort(f.sort, by) }) },
+        label, h("span", { class: "arr", "aria-hidden": "true" }, on ? (f.sort.dir === "asc" ? "▲" : "▼") : "")));
+  };
+  return h("div", { class: "card otable-wrap" }, h("table", { class: "otable" },
+    h("thead", {}, h("tr", {}, cols.map(th), h("th", { scope: "col" }, h("span", { class: "sr" }, "Kupon")))),
+    h("tbody", {}, rows.map((r) => h("tr", {},
+      h("td", {}, matchLink(r), h("small", {}, `${fmtShortWhen(r.kickoff)} · ${r.competition}`)),
+      h("td", { class: "pk" }, r.pick),
+      h("td", { class: "r" }, h("b", { class: "num" }, odds(r.price)), srcTag(r)),
+      h("td", { class: "r" }, pct(r.required)),
+      h("td", { class: "r" }, pct(r.prob), r.unverified ? h("small", {}, "doğrulanmamış") : null),
+      h("td", {}, valueBadge(r) || h("span", { class: "muted" }, "–")),
+      h("td", { class: "r" }, addBtnFor(r, render)))))));
+}
+const valueListSeg = (cur) => segmented("Liste", [["value", "Değerli"], ["all", "Tüm seçenekler"]], cur,
+  (x) => { location.hash = x === "all" ? "#/degerli/tum" : "#/degerli"; });
+function viewOptions(root) {
+  const render = () => {
+    const bar = root.querySelector(".fbar"), sl = bar ? bar.scrollLeft : 0, y = WIDE.matches ? root.scrollTop : window.scrollY;
+    viewOptions(root);
+    const nb = root.querySelector(".fbar");
+    if (nb) nb.scrollLeft = sl;
+    if (WIDE.matches) root.scrollTop = y; else window.scrollTo(0, y);
+  };
+  if (!state.ofilter) state.ofilter = loadFilters();
+  const all = optionRows();
+  const f = Options.effective(state.ofilter, all); // kayıtlı lig artık yoksa: Tüm ligler (kayıt değişmez)
+  const list = Options.apply(all, f);
+  const change = (patch) => {
+    Object.assign(state.ofilter, patch);
+    state.optLimit = OPT_PAGE;
+    saveFilters(state.ofilter);
+    render();
+  };
+  const clear = () => { state.ofilter = Options.defaults(); state.oCustom = false; state.optLimit = OPT_PAGE; saveFilters(state.ofilter); render(); };
+  const limit = state.optLimit || OPT_PAGE;
+  const shown = list.slice(0, limit);
+  const kids = [h("header", { class: "hd" }, h("h1", { class: "title" }, "Değerli"), valueListSeg("all"),
+    h("p", { class: "lede" }, "Modelin olasılık hesapladığı bütün seçenekler, iddaa oranıyla (yoksa yurtdışı). Kazanç garantisi değildir."))];
+  const sports = [...new Set(all.filter((r) => !r.minor && (f.sport === "all" || r.sport === f.sport)).map((r) => r.sport))];
+  if (sports.some((sp) => !iddaaCtx(sp).fetched)) {
+    kids.push(h("p", { class: "alert warn", role: "status" }, h("b", {}, "iddaa oranları yok; "), "yurtdışı oranlar gösteriliyor."));
+  }
+  kids.push(filterBar(f, all, list.length, change, clear));
+  if (!all.length) kids.push(padCard(h("p", { class: "muted" }, "Şu an gösterilecek seçenek yok.")));
+  else if (!list.length) {
+    // çifte şansın yurtdışı oranı yok: iddaa oranı çekilmemişse satır çıkamaz
+    const dcNoIddaa = f.market === "double" && f.sport !== "basketball" && !iddaaCtx("football").fetched;
+    kids.push(padCard(h("p", { class: "muted" }, dcNoIddaa ? "Çifte şans için iddaa oranı gerekiyor." : "Bu filtrelere uyan seçenek yok."),
+      Options.activeCount(f) ? h("button", { type: "button", class: "btn sm secondary", onclick: clear }, "Filtreleri temizle") : null));
+  } else {
+    kids.push(WIDE.matches ? optionTable(shown, f, change, render) : card(shown.map((r) => optionItem(r, render))));
+    if (list.length > shown.length) {
+      kids.push(h("button", { type: "button", class: "btn sm block more-btn",
+        onclick: () => { state.optLimit = limit + OPT_PAGE; render(); } }, `Daha fazla göster (+${Math.min(OPT_PAGE, list.length - shown.length)})`));
+    }
+  }
+  kids.push(h("p", { class: "foot" }, "iddaa'da kapalı ya da bültende olmayan seçenekler gizli (\"Kapalıları göster\"). Değer = tahmin × oran − 1; ",
+    `+%${bandPct()} üstü değerli, −%${bandPct()} altı düşük. Diğer liglerde ve iddaa'nın ek NBA çizgilerinde model doğrulanmamış: renk yok. `,
+    "Gereken = oranın başa baş olasılığı (1 ÷ oran)."), note());
+  root.replaceChildren(...kids);
 }
 
 /* ---------- görünüm: Kupon (Kuponum / Önerilenler) ---------- */
@@ -1980,6 +2177,7 @@ function resolveRoute(hash) {
   if (path === "#/" || path === "#" || path === "") return { view: "today", tab: "bugun" };
   if (path.startsWith("#/mac/")) return { view: "match", tab: "bugun", id: dec(path.slice(6)) };
   if (path === "#/degerli") return { view: "value", tab: "degerli" };
+  if (path === "#/degerli/tum") return { view: "options", tab: "degerli" };
   if (path === "#/kupon") return { view: "kupon", tab: "kupon" };
   if (path === "#/kupon/oneri") return { view: "suggest", tab: "kupon" };
   if (path === "#/gecmis") return { view: "history", tab: "gecmis" };
@@ -2000,11 +2198,13 @@ function route() {
   }
   // Maç detayına hangi listeden gelindi: geri bağlantısı ve menüde seçili sekme ona göre
   if (r.view === "match") {
-    r.from = lastRoute && lastRoute.view === "value" ? "value" : lastRoute && lastRoute.view === "match" ? lastRoute.from : "today";
-    if (r.from === "value") r.tab = "degerli";
+    r.from = lastRoute && (lastRoute.view === "value" || lastRoute.view === "options") ? lastRoute.view
+      : lastRoute && lastRoute.view === "match" ? lastRoute.from : "today";
+    if (r.from === "value" || r.from === "options") r.tab = "degerli";
   }
-  if (lastRoute && (lastRoute.view === "today" || lastRoute.view === "value") && !WIDE.matches) scrollMemo[lastRoute.view] = window.scrollY;
-  const back = lastRoute && lastRoute.view === "match" && (r.view === "today" || r.view === "value");
+  const LISTS = ["today", "value", "options"];
+  if (lastRoute && LISTS.includes(lastRoute.view) && !WIDE.matches) scrollMemo[lastRoute.view] = window.scrollY;
+  const back = lastRoute && lastRoute.view === "match" && LISTS.includes(r.view);
   lastRoute = r;
   document.querySelectorAll(".tabbar a").forEach((a) => {
     if (a.dataset.tab === r.tab) a.setAttribute("aria-current", "page");
@@ -2040,6 +2240,7 @@ function route() {
   else if (r.view === "suggest") viewSuggest(root);
   else if (r.view === "performance") viewPerformance(root);
   else if (r.view === "value") viewValue(root);
+  else if (r.view === "options") viewOptions(root);
   else if (r.view === "historyDetail") viewHistoryDetail(root, r.id);
   else if (r.view === "history") viewHistory(root);
   const nb = noticesBar();
