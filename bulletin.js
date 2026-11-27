@@ -62,18 +62,60 @@ const Bulletin = (() => {
     return { ok: true, events, skipped };
   }
 
+  /* Ad normalleştirme (matching/team_names.normalize ile aynı): aksan, büyük/küçük, noktalama ve FC/SK gibi ekler. */
+  const TRANSLIT = { "ı": "i", "İ": "I", "ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ß": "ss", "æ": "ae", "Æ": "AE" };
+  const STOP = new Set(["fc", "sk", "jk", "ac", "as", "cf", "bc", "ca", "sc", "afc", "cfc", "fk", "sv", "tsg", "vfb", "vfl",
+    "rc", "fsv", "1", "04", "05"]);
+  function normName(s) {
+    let x = String(s).replace(/[ıİøØłŁđĐßæÆ]/g, (c) => TRANSLIT[c]).replace(/\//g, " ");
+    x = x.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, " and ");
+    x = x.replace(/[-.]/g, " ").replace(/[^a-z0-9 ]+/g, "");
+    return x.split(/\s+/).filter((w) => w && !STOP.has(w)).join(" ");
+  }
+  // tek başına takımı ayırt etmeyen kelimeler (Real Madrid / Real Sociedad)
+  const GENERIC = new Set(["real", "united", "city", "club", "sporting", "athletic", "atletico", "inter", "olympique",
+    "racing", "union", "borussia", "deportivo", "town", "sport", "spor", "the", "and", "saint", "san", "los", "angeles"]);
+  /* iddaa adı bizim adla uyuyor mu: normalleştirilmiş adlar aynı ya da ≥ 4 harfli, genel olmayan ortak bir kelime var
+     (ya da ≥ 5 harfli kelime ötekinin başı: Hamburg / Hamburger, Erzurum / Erzurumspor). */
+  function nameFits(a, b) {
+    const x = normName(a), y = normName(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const xs = x.split(" ").filter((w) => !GENERIC.has(w)), ys = y.split(" ").filter((w) => !GENERIC.has(w));
+    return xs.some((u) => ys.some((v) => (u.length >= 4 && u === v)
+      || (Math.min(u.length, v.length) >= 5 && (u.startsWith(v) || v.startsWith(u)))));
+  }
+  const FALLBACK_TOL_MS = 15 * 60 * 1000;
+
   /* Eşleme: lig haritada ve bu sporsa; iki takım id'si haritada; bizim maçta adlar birebir aynı, saat farkı ≤ 2 sa.
-     Eşleşmeyen takım ya da maç loglanır, tahmin edilmez (ters ev/deplasman da eşleşmez). */
+     Yedek (2026-11-27): takımlardan biri haritada yoksa maç ancak saat farkı ≤ 15 dk, haritadaki taraf birebir, haritada
+     olmayan taraf adla uyuyor (nameFits; ad haritada başka id'ye bağlı değil) ve tek aday varsa eşlenir (`guessed`); yeni
+     id → ad `learned`'de döner (app.js bu cihazda hatırlar). Bir bizim maça iki iddaa maçı düşerse ikisi de bırakılır.
+     Eşleşmeyen takım ya da maç loglanır (ters ev/deplasman da eşleşmez). */
   function match(events, ourMatches, map, sport) {
     const pairs = [], teams = [], matches = [], seen = new Set();
     const comps = (map && map.comps) || {}, names = (map && map.teams) || {};
+    const taken = new Set(Object.values(names));
+    const guessed = new Map(); // bizim maç id → [{ev, match, learn}]
+    const logTeams = (ev, home, away) => {
+      for (const [id, name, known] of [[ev.homeId, ev.home, home], [ev.awayId, ev.away, away]]) {
+        if (known == null && !seen.has(id)) { seen.add(id); teams.push({ id, name, comp: ev.compId }); }
+      }
+    };
     for (const ev of events || []) {
       if (comps[ev.compId] !== sport) continue;
       const home = names[ev.homeId], away = names[ev.awayId];
       if (home == null || away == null) {
-        for (const [id, name, known] of [[ev.homeId, ev.home, home], [ev.awayId, ev.away, away]]) {
-          if (known == null && !seen.has(id)) { seen.add(id); teams.push({ id, name, comp: ev.compId }); }
-        }
+        const side = (known, iddaaName, ours) => (known != null ? known === ours : !taken.has(ours) && nameFits(iddaaName, ours));
+        const cands = (ourMatches || []).filter((x) => Math.abs(new Date(x.kickoff).getTime() - ev.kickoff) <= FALLBACK_TOL_MS
+          && side(home, ev.home, x.home) && side(away, ev.away, x.away));
+        if (cands.length === 1) {
+          const m = cands[0], learn = {};
+          if (home == null) learn[ev.homeId] = m.home;
+          if (away == null) learn[ev.awayId] = m.away;
+          if (!guessed.has(m.id)) guessed.set(m.id, []);
+          guessed.get(m.id).push({ ev, match: m, learn, home, away });
+        } else logTeams(ev, home, away);
         continue;
       }
       const m = (ourMatches || []).find((x) => x.home === home && x.away === away
@@ -81,7 +123,15 @@ const Bulletin = (() => {
       if (m) pairs.push({ ev, match: m });
       else matches.push({ home, away, kickoff: new Date(ev.kickoff).toISOString() });
     }
-    return { pairs, log: { teams, matches } };
+    const learned = {};
+    const paired = new Set(pairs.map((p) => p.match.id));
+    for (const [id, list] of guessed) {
+      if (list.length > 1 || paired.has(id)) { for (const g of list) logTeams(g.ev, g.home, g.away); continue; }
+      const g = list[0];
+      pairs.push({ ev: g.ev, match: g.match, guessed: true });
+      Object.assign(learned, g.learn);
+    }
+    return { pairs, learned, log: { teams, matches } };
   }
 
   const keyOf = (id, market, outcome, line) => `${id}|${market}|${outcome}|${line == null ? "" : line}`;
@@ -186,7 +236,7 @@ const Bulletin = (() => {
     return !Number.isFinite(t) || nowMs - t >= EVERY_MS;
   }
 
-  return { MARKETS, url, parse, match, oddsFor, collect, extraOptions, due, parseKey };
+  return { MARKETS, url, parse, match, normName, nameFits, oddsFor, collect, extraOptions, due, parseKey };
 })();
 
 if (typeof module !== "undefined") module.exports = Bulletin;

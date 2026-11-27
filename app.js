@@ -10,6 +10,20 @@ const HSTORE = "macanaliz.gecmis.v1"; // §27 oynanan kuponlar + aylık bütçe
 const ISTORE = "macanaliz.iddaa.v1"; // §29 elle girilen iddaa oranları (maç detayı, Kuponum, Oynadım ortak); §34 otomatik de
 const OTO_STORE = "macanaliz.iddaa.oto.v1"; // §34 "0" = otomatik çekme kapalı (varsayılan açık)
 const DURUM_STORE = "macanaliz.iddaa.durum.v1"; // §34 son çekim durumu (spor başına)
+const TAKIM_STORE = "macanaliz.iddaa.takim.v1"; // §34 yedek eşlemeyle öğrenilen iddaa takım id → bizim ad (bu cihaz)
+function learnedTeams() {
+  try { const x = JSON.parse(localStorage.getItem(TAKIM_STORE) || "{}"); return x && typeof x === "object" ? x : {}; } catch { return {}; }
+}
+/* data.json haritası + bu cihazda öğrenilenler (data.json'daki önce gelir; aynı ad iki id'ye bağlanmaz). */
+function iddaaMap() {
+  const base = DATA.iddaa_map, teams = { ...base.teams }, used = new Set(Object.values(teams));
+  for (const [id, name] of Object.entries(learnedTeams())) if (!(id in teams) && !used.has(name)) { teams[id] = name; used.add(name); }
+  return { ...base, teams };
+}
+function rememberTeams(learned) {
+  if (!learned || !Object.keys(learned).length) return;
+  try { localStorage.setItem(TAKIM_STORE, JSON.stringify({ ...learnedTeams(), ...learned })); } catch { /* yok sayılır */ }
+}
 const KINDS = [
   ["safe", History.TYPE_NAMES.safe, "Tutma olasılığı görece yüksek, oranı düşük. Hiçbir kupon garanti değildir."],
   ["risky", "Riskli", "Risk almayan viski içemez."],
@@ -366,7 +380,8 @@ async function fetchSport(sport, st) {
   const r = Bulletin.parse(await res.json(), Date.now());
   if (!r.ok) throw new Error("Biçim değişti");
   const ours = (DATA[sport] || []).flatMap((d) => d.matches).filter((m) => !started(m));
-  const mt = Bulletin.match(r.events, ours, DATA.iddaa_map, sport);
+  const mt = Bulletin.match(r.events, ours, iddaaMap(), sport);
+  rememberTeams(mt.learned);
   const c = Bulletin.collect(mt.pairs, sport);
   if (!c.ok) throw new Error("Biçim değişti"); // eski otomatik oranlara dokunulmaz
   if (!iddaaAutoOn()) return false; // çekme sürerken kapatıldı: oranları geri yazma
@@ -381,7 +396,7 @@ async function fetchSport(sport, st) {
   // §35 bültenin en geç maçı: sonraki günlerin kuponları "iddaa henüz açmadı" diye yurtdışı oranla kalır
   const last = r.events.reduce((a, e) => Math.max(a, e.kickoff), -Infinity);
   Object.assign(st, { lastOk: at, coverTo: Number.isFinite(last) ? new Date(last).toISOString() : null,
-    error: null, errorAt: null, matched: mt.pairs.length, odds: nOdds, unknown, skipped: r.skipped.length,
+    error: null, errorAt: null, matched: mt.pairs.length, guessed: mt.pairs.filter((p) => p.guessed).length, odds: nOdds, unknown, skipped: r.skipped.length,
     nTeams: mt.log.teams.length, teams: mt.log.teams.slice(0, 20).map((t) => t.name),
     nMatches: mt.log.matches.length, matches: mt.log.matches.slice(0, 20).map((x) => `${x.home} – ${x.away}`) });
   return true; // kayıt değişmiş olabilir (yeni oranlar ya da bültenden düşenler)
@@ -491,7 +506,8 @@ async function fetchLive(sport, cands, st) {
   if (!p.ok) { state.live[sport] = { ...t0, version: 0 }; throw new Error("Biçim değişti"); } // sonraki tur tam istek
   const t = (state.live[sport] = Live.merge(t0, p, Date.now()));
   // eşleme (§34 ile aynı): olayı tablodaki maçlar; bir kez eşlenen maç tabloda olayı silinse de eşli kalır
-  const mt = Bulletin.match(Object.values(t.events), cands, DATA.iddaa_map, sport);
+  const mt = Bulletin.match(Object.values(t.events), cands, iddaaMap(), sport);
+  rememberTeams(mt.learned);
   for (const { ev, match } of mt.pairs) state.liveIds.set(match.id, { sport, iddaaId: ev.id });
   // görülen durum kodları (ilk NBA gecesi kontrolü, §37)
   const codes = (st.codes = st.codes || {});
