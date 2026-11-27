@@ -173,6 +173,7 @@ function svg(tag, attrs, ...kids) {
 const ICONS = {
   back: ["M15 5l-7 7 7 7"], chev: ["M9 5l7 7-7 7"], share: ["M12 3v13M7 8l5-5 5 5M5 13v7h14v-7"],
   plus: ["M12 5v14M5 12h14"], down: ["M6 9l6 6 6-6"], check: ["M5 12.5l4.5 4.5L19 7.5"], trend: ["M3 17l5-5 4 3 8-9"],
+  gear: ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"],
 };
 function icon(name, size, sw) {
   const s = svg("svg", { width: size || 22, height: size || 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
@@ -701,29 +702,76 @@ function dayChipList(onChange) {
     "aria-label": `${dayName(d, state.sport)}, ${d.label}, ${d.matches.length} maç`,
     onclick: () => { state.day = i; onChange(); } }, dayName(d, state.sport, true), h("span", { class: "n" }, d.matches.length)));
 }
+/* §40 "önce karar": KARAR / nokta / en iyi seçenekler için iddaa bağlamı (decide.js). */
+const decideCtx = { price: (id, key) => iddaaOf(id, key), options: (m) => optsOf(m), started: (m) => started(m), minor: (m) => isMinor(m) };
+/* Bugün başlığının alt satırı: "Cuma 27 Kasım · 7 maç · iddaa 15:39"; oranlar 12 saatten eskiyse uyarı. */
+function todaySub(day, n) {
+  const parts = [`${cap1(weekday(day.date))} ${day.label} · ${n} maç`];
+  const sp = state.sport;
+  if (sp !== "minor") {
+    const st = loadIddaaStatus()[sp] || {};
+    if (iddaaAutoOn() && st.lastOk) parts.push(`iddaa ${fmtStamp(st.lastOk)}`);
+  }
+  const t = sp === "minor" ? DATA.minor_info && DATA.minor_info.fixtures_updated : DATA.odds_updated && DATA.odds_updated[sp];
+  const stale = t && Date.now() - new Date(t).getTime() > (sp === "minor" ? PROGRAM_STALE_MS : STALE_MS);
+  return h("p", { class: "sub" }, parts.join(" · "), stale ? h("span", { class: "warn-t" }, ` · ${sp === "minor" ? "program" : "oranlar"} eski olabilir`) : null);
+}
+/* Günün özeti: iddaa'da artı değerli seçenek sayısı; yoksa en yakın seçenek ve gereken oran. */
+function summaryRow(r) {
+  return h("span", { class: "sum-pick" }, h("b", {}, `${r.home}–${r.away} · ${r.pick}`),
+    ` iddaa ${odds(r.price)}, bizim ${pct(r.prob)} → ${Iddaa.formatPct(r.ev)}`);
+}
+function daySummaryCard(day) {
+  if (state.sport === "minor") return null;
+  const upcoming = day.matches.filter((m) => !isDone(m) && !started(m));
+  if (!upcoming.length) return null;
+  const ids = new Set(upcoming.map((m) => m.id));
+  const s = Decide.daySummary(optionRows().filter((r) => ids.has(r.match)));
+  const edges = upcoming.filter((m) => edgeOf(m)).length;
+  const edgeLine = edges ? ` Model ${edges} maçta piyasadan ayrılıyor.` : "";
+  let title, body;
+  if (s.state === "value") {
+    title = `iddaa'da ${s.count} artı değerli seçenek var.`;
+    body = [h("span", {}, s.count > 2 ? "En iyi ikisi:" : s.count === 2 ? "İkisi:" : "Seçenek:"), ...s.top.map(summaryRow)];
+  } else if (s.state === "none") {
+    const r = s.nearest;
+    title = "iddaa'da artı değerli seçenek yok.";
+    body = [h("span", {}, "En yakın: ", summaryRow(r), `. Oran ${odds(r.breakEven)} ve üstüne çıkarsa artıya geçer.${edgeLine}`)];
+  } else {
+    title = "iddaa oranı bulunamadı.";
+    body = [h("span", {}, iddaaAutoOn() ? "iddaa bülteni bu günü henüz açmamış olabilir ya da çekme başarısız oldu." : "Otomatik iddaa çekme kapalı.",
+      edgeLine, " ", h("a", { class: "lnk", href: "#/ayarlar" }, "Ayarlar ›"))];
+  }
+  return h("section", { class: "card pad summary", "aria-label": "Günün özeti" },
+    h("p", { class: "eyebrow" }, "Günün özeti"),
+    h("p", { class: "sum-title" }, title),
+    h("p", { class: "sum-body" }, body),
+    s.state !== "nodata" ? h("a", { class: "lnk strong", href: "#/degerli" }, "Değerli'ye git ›") : null);
+}
 function viewToday(root) {
   const render = () => (WIDE.matches ? reselectFirst() : viewToday(root));
   if (state.sport === "minor" && !DATA.minor) { state.sport = "football"; state.day = firstDay(); }
   const day = days()[state.day];
+  const nLive = day ? Decide.liveCount(day.matches, liveOf) : 0;
+  if (!nLive) state.liveOnly = false;
+  const list = day ? (state.liveOnly ? day.matches.filter((m) => Decide.isLive(liveOf(m.id))) : day.matches) : [];
   const n = day ? day.matches.length : 0;
+  const liveChip = nLive ? h("button", { type: "button", class: "chip chip-live", "aria-pressed": !!state.liveOnly,
+    "aria-label": `Sadece canlı maçlar (${nLive})`, onclick: () => { state.liveOnly = !state.liveOnly; render(); } },
+  h("span", { class: "ldot", "aria-hidden": "true" }), `Canlı · ${nLive}`) : null;
   const kids = [h("header", { class: "hd" },
-    h("div", { class: "brandbar" },
-      h("a", { class: "brand", href: "#/", "aria-label": "Maç Analiz" },
-        h("span", { class: "brand-mark", "aria-hidden": "true" }, icon("trend", 18, 2.4)),
-        h("span", { class: "brand-name", "aria-hidden": "true" }, "MAÇ ANALİZ")),
-      oddsStamp()),
-    h("div", { class: "title-row" }, h("h1", { class: "title" }, day ? dayName(day, state.sport) : "Bugün"),
-      day ? h("span", { class: "sub" }, `${weekday(day.date)}, ${day.label} · ${n} maç`) : null),
-    h("div", { class: "chip-rows" },
-      h("div", { class: "chips", role: "group", "aria-label": "Spor" }, sportChips(render)),
-      days().length > 1 ? h("div", { class: "chips", role: "group", "aria-label": "Gün" }, dayChipList(render)) : null))];
+    h("div", { class: "title-row" },
+      h("div", { class: "title-col" }, h("h1", { class: "title" }, day ? dayName(day, state.sport) : "Bugün"), day ? todaySub(day, n) : null),
+      h("a", { class: "gear", href: "#/ayarlar", "aria-label": "Ayarlar" }, icon("gear", 22, 1.8))),
+    h("div", { class: "chips", role: "group", "aria-label": "Spor ve gün" }, liveChip, sportChips(render),
+      !state.liveOnly && days().length > 1 ? [h("span", { class: "chip-sep", "aria-hidden": "true" }), ...dayChipList(render)] : null))];
   const warn = oddsWarning();
   if (warn) kids.push(warn);
-  if (state.sport === "minor") kids.push(minorNote());
+  if (day && !state.liveOnly) kids.push(daySummaryCard(day));
   if (!n) kids.push(h("p", { class: "empty" }, "Bu gün için maç yok."));
   else {
     const groups = [];
-    for (const m of day.matches) {
+    for (const m of list) {
       if (!groups.length || groups[groups.length - 1].comp !== m.competition) groups.push({ comp: m.competition, list: [] });
       groups[groups.length - 1].list.push(m);
     }
@@ -740,9 +788,11 @@ function viewToday(root) {
         card(g.list.map(matchRow))));
     }
   }
-  kids.push(h("p", { class: "foot" }, state.sport === "minor" ? "Sayılar yüzde, sadece kendi modelden."
-    : `Sayılar yüzde${state.sport === "basketball" ? " (uzatmalar dahil)" : ""}. Rozet: model piyasadan en az ${Math.round(EDGE * 100)} puan ayrılıyor.`),
-    note(state.sport === "minor"), quotaLine());
+  kids.push(h("p", { class: "foot" }, state.sport === "minor" ? "Sayılar yüzde, sadece kendi modelden (doğrulanmamış)."
+    : `Sayılar bizim tahminimiz (%)${state.sport === "basketball" ? ", uzatmalar dahil" : ""}. En olası sonuç kalın.`),
+  state.sport === "minor" ? null : h("p", { class: "foot legend" }, "iddaa kararı: ",
+    ["play", "close", "skip", "none"].map((b) => h("span", { class: "lg-item" }, h("span", { class: `vdot ${b}`, "aria-hidden": "true" }),
+      ` ${Decide.BAND_TEXT[b]}`))));
   root.replaceChildren(...kids.filter(Boolean));
 }
 /* §32 biten maç: skor + "model ✓/✗" rozeti (modelin en yüksek olasılık verdiği sonuç gerçekleşti mi). */
@@ -752,15 +802,24 @@ function hitBadge(rep, xs) {
   return badge(rep.model_hit ? "model ✓" : "model ✗", rep.model_hit ? "good" : "bad", xs ? "xs" : null);
 }
 function doneRow(m) {
-  const rep = m.report, vals = probs3(m, "prob");
+  const rep = m.report;
   const label = `${fmtTime(m.kickoff)}, bitti. ${m.home} – ${m.away}, skor ${m.score}`
     + (rep && rep.model_hit != null ? `, model ${rep.model_hit ? "bildi" : "bilemedi"}` : "");
   return h("a", { class: "mrow row", href: `#/mac/${encodeURIComponent(m.id)}`, "aria-label": label },
     h("div", { class: "mrow-top fin", "aria-hidden": "true" },
       h("span", { class: "time done" }, fmtTime(m.kickoff), h("small", {}, "bitti")),
-      h("div", { class: "teams" }, ["home", "away"].map((s) => h("span", { class: "team" }, crest(m, s), h("span", { class: "nm" }, m[s])))),
-      h("span", { class: "fscore" }, m.score.replace("-", "–"))),
-    h("div", { class: "mrow-bot", "aria-hidden": "true" }, vals ? pbar(vals) : null, hitBadge(rep, true)));
+      h("div", { class: "teams" }, ["home", "away"].map((s) => h("span", { class: "team" }, crest(m, s), h("span", { class: "nm" }, m[s]))),
+        rep && rep.model_hit != null ? h("span", { class: "mnote" }, hitBadge(rep, true)) : null),
+      h("span", { class: "fscore" }, m.score.replace("-", "–"))));
+}
+/* Listedeki model farkı yazısı: "Model 2'de +6 puan" (1'de, X'te, 2'de). */
+const LOC = { home: "1'de", draw: "X'te", away: "2'de" };
+const edgeLong = (e) => `Model ${LOC[e.outcome]} ${pts(e.d)} puan`;
+/* §40 iddaa karar noktası (decide.js matchBand): renk + aria-label + "oyna" yazısı; renk tek başına anlam taşımaz. */
+function bandDot(band) {
+  if (!band) return null;
+  return h("span", { class: `vband ${band}`, title: `iddaa: ${Decide.BAND_TEXT[band]}` },
+    h("span", { class: `vdot ${band}` }), band === "play" ? h("span", { class: "vtxt" }, "oyna") : null);
 }
 function matchRow(m) {
   if (isDone(m)) return doneRow(m);
@@ -769,18 +828,20 @@ function matchRow(m) {
   const top = vals ? Math.max(...vals) : null;
   const e = edgeOf(m), live = started(m);
   const lv = liveOf(m.id), lvOn = lv && lv.state !== "gone"; // §37 canlı skor
+  const band = Decide.matchBand(m, decideCtx);
+  const sc = lvOn ? lv.score.split("-") : null;
   const label = `${lvOn ? `${liveWord(lv)}, ${dash(lv.score)}` : `${fmtTime(m.kickoff)}${live ? `, ${lv ? "sonuç bekleniyor" : "başladı"}` : ""}`}. ${m.home} – ${m.away}. `
     + (vals ? outs.map((k, i) => `${SHORT[k]} %${Math.round(vals[i] * 100)}`).join(", ") : "Olasılık yok")
-    + (e ? `. ${edgeText(e)} puan` : "");
+    + (e ? `. ${edgeLong(e)}` : "") + (band ? `. iddaa: ${Decide.BAND_TEXT[band]}` : "");
   return h("a", { class: "mrow row", href: `#/mac/${encodeURIComponent(m.id)}`, "aria-label": label },
     h("div", { class: outs.length === 2 ? "mrow-top two" : "mrow-top", "aria-hidden": "true" },
-      lvOn ? h("span", { class: "time live score" }, dash(lv.score), h("small", {}, lv.label))
-        : h("span", { class: live ? "time live" : "time" }, fmtTime(m.kickoff), live ? h("small", {}, lv ? "sonuç bekleniyor" : "başladı") : null),
-      h("div", { class: "teams" }, ["home", "away"].map((s) => h("span", { class: "team" }, crest(m, s), h("span", { class: "nm" }, m[s])))),
+      lvOn ? h("span", { class: "time" }, h("span", { class: "minute" }, lv.label))
+        : h("span", { class: live ? "time live" : "time" }, fmtTime(m.kickoff), live ? h("small", {}, lv ? "sonuç bekleniyor" : "başladı") : bandDot(band)),
+      h("div", { class: "teams" }, ["home", "away"].map((s, i) => h("span", { class: "team" }, crest(m, s), h("span", { class: "nm" }, m[s]),
+        sc ? h("b", { class: "lscore" }, sc[i]) : null)),
+      e ? h("span", { class: "mnote" }, edgeLong(e)) : null),
       vals ? vals.map((p) => h("span", { class: p === top ? "p3 top" : "p3" }, Math.round(p * 100)))
-        : outs.map(() => h("span", { class: "p3" }, "–"))),
-    h("div", { class: "mrow-bot", "aria-hidden": "true" }, vals ? pbar(vals) : null,
-      e ? badge(edgeText(e), "accent", "xs") : null));
+        : outs.map(() => h("span", { class: "p3" }, "–"))));
 }
 
 /* ---------- görünüm: lig sayfası (§33 sezon simülasyonu) ----------
@@ -2071,6 +2132,12 @@ function settingsSection(render) {
     h("p", { class: "sec-note" }, `Kayıtlar sadece bu cihazda. Son yedek: ${lastBackupText()}. `,
       "Tarayıcı verisi silinirse kaybolur; ara sıra yedek al. Yedekten yükleme mevcut kuponları silmez, birleştirir."));
 }
+/* §40 Ayarlar (dişliden). Aşama 1: Geçmiş'teki ayar bölümleri burada da; Aşama 5'te sayfa yeniden düzenlenir ve Geçmiş'ten kalkar. */
+function viewSettings(root) {
+  const render = () => { const y = window.scrollY; viewSettings(root); window.scrollTo(0, y); };
+  root.replaceChildren(h("div", { class: "topnav" }, backLink(state.settingsFrom || "#/", "Geri")), h("header", { class: "hd tight" }, h("h1", { class: "title" }, "Ayarlar")),
+    iddaaFeedSection(render), liveSection(render), settingsSection(render), quotaLine(), note());
+}
 function viewHistory(root) {
   const render = () => { const y = window.scrollY; viewHistory(root); window.scrollTo(0, y); };
   applyResults();
@@ -2425,12 +2492,14 @@ function resolveRoute(hash) {
   if (path === "#/gecmis") return { view: "history", tab: "gecmis" };
   if (path.startsWith("#/gecmis/")) return { view: "historyDetail", tab: "gecmis", id: dec(path.slice(9)) };
   if (path === "#/performans") return { view: "performance", tab: "performans" };
+  if (path === "#/ayarlar") return { view: "settings", tab: null };
   if (path.startsWith("#/lig/")) return { view: "league", tab: "bugun", id: dec(path.slice(6)) };
   if (path.startsWith("#/maclar/")) return { redirect: "#/" };
   return { redirect: "#/" };
 }
 const scrollMemo = {}; // liste ekranından detaya gidip geri dönünce kaldığı yer
 let lastRoute = null;
+let lastHash = null;
 function route() {
   const root = document.getElementById("view");
   let r = resolveRoute(location.hash);
@@ -2447,7 +2516,9 @@ function route() {
   const LISTS = ["today", "value", "options"];
   if (lastRoute && LISTS.includes(lastRoute.view) && !WIDE.matches) scrollMemo[lastRoute.view] = window.scrollY;
   const back = lastRoute && lastRoute.view === "match" && LISTS.includes(r.view);
+  if (r.view === "settings" && lastRoute && lastRoute.view !== "settings") state.settingsFrom = lastHash; // Ayarlar'ın "Geri"si
   lastRoute = r;
+  lastHash = location.hash || "#/";
   document.querySelectorAll(".tabbar a").forEach((a) => {
     if (a.dataset.tab === r.tab) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -2485,6 +2556,7 @@ function route() {
   else if (r.view === "options") viewOptions(root);
   else if (r.view === "historyDetail") viewHistoryDetail(root, r.id);
   else if (r.view === "history") viewHistory(root);
+  else if (r.view === "settings") viewSettings(root);
   const nb = noticesBar();
   if (nb) { const hd = root.querySelector(":scope > header, :scope > .topnav"); if (hd) hd.after(nb); else root.prepend(nb); }
   if (WIDE.matches) root.scrollTop = 0;

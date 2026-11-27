@@ -309,6 +309,44 @@ details.more p { line-height: 1.45; margin-bottom: 8px; }
 .mrow-bot { display: flex; align-items: center; gap: 10px; padding-left: 52px; min-height: 6px; }
 .mrow-bot .badge { flex-shrink: 0; }
 
+/* ---------- §40 Bugün: sıkı satır, karar noktası, günün özeti ---------- */
+.title-row:has(.gear) { flex-wrap: nowrap; align-items: flex-start; }
+.title-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.title-col .sub { margin: 0; font-size: 13px; color: var(--muted); text-align: left; }
+.gear { width: 44px; height: 44px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--surface);
+  color: var(--text); display: inline-flex; align-items: center; justify-content: center; }
+.chip-live { border-color: var(--bad); }
+.chip .ldot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+.summary { gap: 6px; }
+.eyebrow { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); }
+.sum-title { margin: 0; font-size: 17px; font-weight: 700; line-height: 1.3; }
+.sum-body { margin: 0; font-size: 14px; line-height: 1.45; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+.sum-body b { color: var(--text); font-weight: 600; }
+.lnk { color: var(--link); font-weight: 600; text-decoration: none; }
+.lnk.strong { display: inline-flex; align-items: center; min-height: 44px; margin: -6px 0 -12px; font-size: 15px; align-self: flex-start; }
+.mrow:has(.mrow-top) { padding: 12px; gap: 0; }
+.mrow .mnote { font-size: 12px; font-weight: 600; color: var(--link); line-height: 1.2; }
+.mrow .minute { display: inline-block; padding: 2px 7px; border-radius: 6px; background: var(--accent); color: var(--on-accent);
+  font-size: 12px; font-weight: 700; white-space: nowrap; }
+.team .lscore { margin-left: auto; padding-left: 6px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.vband { display: flex; align-items: center; gap: 4px; margin-top: 5px; }
+.vdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.vdot.play { background: var(--good); }
+.vdot.close { background: var(--warn); }
+.vdot.skip { background: var(--bad); }
+.vdot.none { background: var(--draw); }
+.vtxt { font-size: 10.5px; font-weight: 700; color: var(--good); }
+.foot.legend { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+@media (max-width: 360px) { /* küçük telefon: takım adına yer aç */
+  .mrow-top { grid-template-columns: 42px minmax(0, 1fr) 32px 32px 32px; gap: 2px; }
+  .cols { grid-template-columns: minmax(0, 1fr) 32px 32px 32px; gap: 2px; }
+  .mrow-top.two { grid-template-columns: 42px minmax(0, 1fr) 34px 34px; }
+  .mrow .team { gap: 6px; font-size: 14px; }
+  .mrow .team .logo { width: 16px; height: 16px; }
+  .mrow .p3 { font-size: 16px; }
+}
+.legend .lg-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
 /* ---------- Maç detayı ---------- */
 .mhead { display: flex; flex-direction: column; gap: 18px; padding: 8px 4px 0; }
 .mhead .meta { text-align: center; font-size: 13px; color: var(--muted); }
