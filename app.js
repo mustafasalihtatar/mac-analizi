@@ -926,10 +926,219 @@ function shareBtn(m) {
   return h("a", { class: "icon-btn", href: `https://wa.me/?text=${encodeURIComponent(text)}`, target: "_blank", rel: "noopener",
     "aria-label": "Maçı WhatsApp'ta paylaş" }, icon("share", 22, 2));
 }
+/* §40 maç detayı: varsayılan "özet" (TAHMİN → KARAR → en iyi 3 → açılır bölümler); #/mac/<id>/tum eski sekmeli görünüm. */
+const matchHref = (id, all) => `#/mac/${encodeURIComponent(id)}${all ? "/tum" : ""}`;
 function viewMatch(root, id, from, opts) {
-  const wide = !!(opts && opts.wide); // masaüstü sağ sütun: geri bağlantısı yok, liste solda duruyor
-  const back = wide ? h("span") : from === "value" ? backLink("#/degerli", "Değerli")
+  if (opts && opts.all) viewMatchAll(root, id, from, opts);
+  else viewMatchSummary(root, id, from, opts);
+}
+function matchBack(from, wide) {
+  return wide ? h("span") : from === "value" ? backLink("#/degerli", "Değerli")
     : from === "options" ? backLink("#/degerli/tum", "Tüm seçenekler") : backLink("#/", "Bugün");
+}
+/* Üst kartın takım bloğu: ad, son 5 form, "14. · 12 puan". */
+function teamRank(m, side) {
+  const t = m.info && m.info.table, src = m.info && m.info[`${side}_src`];
+  const r = t && src && t.find((x) => x["Takım"] === src);
+  return r ? `${r["Sıra"]}. · ${r.P} puan` : null;
+}
+function formOf(m, side) {
+  if (m.sport === "basketball") return m.nba_info && m.nba_info.form ? m.nba_info.form[side] : null;
+  return m.info ? m.info[`${side}_form`] : null;
+}
+function qTeam(m, side) {
+  const rows = formOf(m, side), rk = teamRank(m, side);
+  return h("div", { class: `qteam ${side}` }, h("b", { class: "qname" }, m[side]),
+    rows && rows.length ? h("div", { class: "qform", role: "img", "aria-label": `Son ${rows.length} maç: ${rows.map((r) => RES_NAMES[r.result] || r.result).join(", ")}` },
+      rows.map((r) => h("span", { class: `fb ${r.result}`, "aria-hidden": "true" }, r.result))) : null,
+    rk ? h("small", {}, rk) : null);
+}
+/* 1-X-2 barı: parçaların içinde yüzde (dar parçada yazı yok, altta isimlerle yine yazılır). */
+function qBar(m, vals) {
+  const outs = outsOf(m), cls = { home: "h", draw: "d", away: "a" };
+  const name = (k) => (k === "draw" ? "Beraberlik" : m[k]);
+  return h("div", { class: "qbar-wrap" },
+    h("div", { class: "qbar", role: "img", "aria-label": outs.map((k, i) => `${name(k)} %${Math.round(vals[i] * 100)}`).join(", ") },
+      outs.map((k, i) => h("span", { class: `qseg ${cls[k]}`, style: `flex-grow:${Math.max(vals[i], 0.001)}`, "aria-hidden": "true" },
+        vals[i] >= 0.12 ? `%${Math.round(vals[i] * 100)}` : ""))),
+    h("div", { class: "qbar-names", "aria-hidden": "true" }, outs.map((k, i) => h("span", {}, vals[i] < 0.12 ? `${name(k)} %${Math.round(vals[i] * 100)}` : name(k)))));
+}
+function qTile(label, big, small) {
+  return h("div", { class: "qtile" }, h("small", {}, label), h("b", {}, big), small ? h("span", {}, small) : null);
+}
+function qTiles(m) {
+  const e = m.expected || {}, nba = m.sport === "basketball";
+  if (nba) {
+    const j = m.nba_info && m.nba_info.injuries;
+    const n = (s) => (j && j[s] ? j[s].length : 0);
+    return [qTile("Beklenen fark", e.margin == null ? "–" : signedC(e.margin), "ev sahibi"),
+      qTile("Toplam sayı", e.total == null ? "–" : fmtDec(e.total), "uzatmalar dahil"),
+      qTile("Eksikler", j && j.status !== "no_report" ? `${n("home")} · ${n("away")}` : "–",
+        !j || j.status === "no_report" ? "rapor yok" : j.effect ? `fark etkisi ${signedC(j.effect)}` : "etki yok")];
+  }
+  const ts = (m.stats && m.stats.top_scores) || [];
+  const dash2 = (s) => s.replace("-", "–");
+  const j = m.injuries;
+  const miss = (s) => (j && j[s] ? j[s].missing.length : 0);
+  const hit = j ? (miss("home") > miss("away") ? m.home : miss("away") > miss("home") ? m.away : null) : null;
+  return [qTile("En olası skor", ts.length ? dash2(ts[0].score) : "–", ts.length > 1 ? ts.slice(1, 3).map((t) => dash2(t.score)).join(" · ") : null),
+    qTile("Beklenen gol", e.home == null ? "–" : `${fmtDec(e.home)}–${fmtDec(e.away)}`, e.home == null ? null : `toplam ${fmtDec(e.home + e.away)}`),
+    qTile("Eksikler", j ? `${miss("home")} · ${miss("away")}` : "–", !j ? "veri yok" : hit ? `${hit} etkilenir` : "denk")];
+}
+function sourceTag(m) {
+  const src = isMinor(m) ? "Sadece model (doğrulanmamış)" : blendOn(m) ? "Piyasa + model (harman)" : "Piyasa";
+  return h("p", { class: "qsrc" }, `${src} · analiz ${fmtStamp(DATA.generated_at)}`);
+}
+/* Üst kart: takımlar + form + sıra; ortada canlı/bitti skoru; TAHMİN başlığı; 1-X-2 barı; 3 kutu; kaynak. */
+function qHead(m) {
+  const vals = probs3(m, "prob");
+  const lv = isDone(m) ? null : liveOf(m.id);
+  const score = isDone(m) ? m.score : lv && lv.state !== "gone" ? lv.score : null;
+  const mid = score ? h("div", { class: "qscore", "aria-label": `Skor ${m.home} ${score.split("-")[0]}, ${m.away} ${score.split("-")[1]}` },
+    h("b", {}, dash(score)), h("small", {}, isDone(m) ? "bitti" : liveWord(lv))) : null;
+  const hl = vals ? Decide.headline({ sport: m.sport, home: m.home, away: m.away, probs: vals, expected: m.expected }) : null;
+  return h("section", { class: "card qhead", "aria-label": "Tahmin" },
+    h("div", { class: "qteams" }, qTeam(m, "home"), mid, qTeam(m, "away")),
+    hl ? h("div", { class: "qtitle" }, h("p", { class: "eyebrow" }, isDone(m) ? "Maç öncesi tahmin" : "Tahmin"), h("h2", {}, hl.title), h("p", { class: "qsub" }, hl.sub))
+      : h("p", { class: "qsub" }, "Bu maç için olasılık yok."),
+    vals ? qBar(m, vals) : null,
+    isDone(m) ? null : h("div", { class: "qtiles" }, qTiles(m)),
+    sourceTag(m));
+}
+const BAND_BADGE = { play: ["Oynanabilir", "good"], close: ["Yakın ama eksi", "warn"], skip: ["iddaa'da oynama", "bad"],
+  none: ["iddaa oranı yok", "muted"], minor: ["Doğrulanmamış model", "muted"], started: ["Maç başladı", "muted"] };
+const pct1 = (x) => `%${(x * 100).toFixed(1).replace(".", ",").replace(",0", "")}`;
+function verdictCard(m) {
+  const v = Decide.verdict(m, decideCtx);
+  const [bt, bk] = BAND_BADGE[v.band];
+  const head = h("div", { class: "vhead" }, h("p", { class: "eyebrow" }, "Karar"), badge(bt, bk));
+  const all = h("a", { class: "lnk", href: matchHref(m.id, true) }, "Tüm seçenekler ›");
+  if (v.band === "started") return h("section", { class: "card pad verdict", "aria-label": "Karar" }, head,
+    h("p", { class: "vtext" }, "Maç başladı; iddaa'nın canlı oranı sitede yok, karar verilmez."));
+  if (v.band === "minor") return h("section", { class: "card pad verdict", "aria-label": "Karar" }, head,
+    h("p", { class: "vtext" }, "Bu ligde sadece kendi modelimiz var ve doğrulanmadı; iddaa değeri hesaplanmaz."),
+    h("p", { class: "vnote" }, "iddaa oranını Tüm seçenekler'de yazarsan gereken olasılığı görürsün. ", all));
+  if (v.band === "none") return h("section", { class: "card pad verdict", "aria-label": "Karar" }, head,
+    h("p", { class: "vtext" }, "Bu maç için iddaa oranı bulunamadı."),
+    h("p", { class: "vnote" }, iddaaAutoOn() ? "Bülten bu maçı henüz açmamış olabilir. " : "Otomatik iddaa çekme kapalı. ",
+      "Oranı elle girebilirsin: ", all));
+  const pick = v.option.pick;
+  const text = v.band === "play" ? `En iyi seçenek ${pick}; iddaa oranı yeterli.`
+    : v.band === "close" ? `En iyi seçenek ${pick}; iddaa oranı biraz düşük.` : `En iyi seçenek bile ${pick}; iddaa oranı çok düşük.`;
+  const evCls = v.band === "play" ? "good-t" : "bad-t";
+  return h("section", { class: "card pad verdict", "aria-label": "Karar" }, head,
+    h("p", { class: "vtext" }, text),
+    h("div", { class: "vboxes" },
+      h("div", {}, h("small", {}, "Bizim"), h("b", {}, pct(v.prob))),
+      h("div", {}, h("small", {}, "Gereken"), h("b", {}, pct1(v.required))),
+      h("div", {}, h("small", {}, `iddaa ${odds(v.price)}`), h("b", { class: evCls }, Iddaa.formatPct(v.ev)))),
+    h("p", { class: "vnote" }, v.band === "play" ? `Oran ${odds(v.breakEven)} altına düşerse değer kalmaz.`
+      : `Oran ${odds(v.breakEven)} ve üstüne çıkarsa artıya geçer.`));
+}
+const BEST_SORTS = [["value", "Getiriye göre"], ["prob", "Olasılığa göre"], ["odds", "Orana göre"]];
+function bestCard(m, render) {
+  const sort = state.bestSort || "value";
+  const rows = Decide.bestOptions(m, decideCtx, sort, 3);
+  const sel = h("select", { class: "bsort", "aria-label": "Sıralama", onchange: (ev) => { state.bestSort = ev.target.value; render(); } },
+    BEST_SORTS.map(([k, t]) => h("option", { value: k, selected: k === sort }, t)));
+  const minor = isMinor(m);
+  const row = (r) => {
+    const o = r.option, can = o.addable || minor, inK = inKupon(o.key);
+    const evEl = r.ev == null ? h("span", { class: "muted" }, "–")
+      : h("span", { class: r.ev >= Decide.PLAY - 1e-9 ? "good-t" : "bad-t" }, Iddaa.formatPct(r.ev));
+    return h("div", { class: "brow row" },
+      h("span", { class: "bpick" }, o.pick, isDerived(o) ? badge("türetilmiş", "warn", "xs") : null),
+      h("span", { class: "bnum" }, pct(r.prob)),
+      h("span", { class: r.price != null ? "bnum" : "bnum muted" }, r.price != null ? odds(r.price) : "yok"),
+      h("span", { class: "bnum" }, evEl),
+      can ? h("button", { type: "button", class: "badd", "aria-pressed": inK, "aria-label": `${o.pick}: ${inK ? "kupondan çıkar" : "kupona ekle"}`,
+        onclick: () => { toggleOption(m, o); render(); } }, icon(inK ? "check" : "plus", 18, 2.4)) : h("span"));
+  };
+  return h("section", { class: "card best", "aria-label": "En iyi 3 seçenek" },
+    h("div", { class: "bhead" }, h("p", { class: "eyebrow" }, "En iyi 3 seçenek"), sel),
+    h("div", { class: "brow bcols", "aria-hidden": "true" }, h("span", {}, "Seçenek"), h("span", {}, "Bizim"), h("span", {}, "iddaa"), h("span", {}, "Değer"), h("span")),
+    rows.length ? rows.map(row) : h("p", { class: "empty-sm", style: "padding:12px 16px" }, "Bu maç için seçenek yok."),
+    h("a", { class: "lnk ball", href: matchHref(m.id, true) }, `Tüm seçenekler (${m.sport === "basketball" ? "Sonuç · Sayı" : "Sonuç · Gol"} · Takımlar) ›`));
+}
+/* Açılır bölüm: başlık + tek satır özet; içerik ilk açılışta kurulur. */
+function acc(title, sub, build, open) {
+  let built = false;
+  const body = h("div", { class: "acc-body" });
+  const fill = () => { if (!built) { built = true; body.replaceChildren(...build().filter(Boolean)); } };
+  const d = h("details", { class: "acc", ontoggle: (ev) => { if (ev.currentTarget.open) fill(); } },
+    h("summary", {}, h("span", { class: "acc-t" }, h("b", {}, title), sub ? h("small", {}, sub) : null), icon("chev", 18, 2)), body);
+  if (open) { fill(); d.open = true; }
+  return d;
+}
+const r3 = (v) => (v ? v.map((x) => Math.round(x * 100)).join("·") : null);
+function compareBody(m) {
+  const minor = isMinor(m), shown = probs3(m, "prob"), mk = minor ? null : probs3(m, "market_prob"), md = minor ? null : probs3(m, "model_prob");
+  const bl = blendOn(m);
+  const line = (lab, v, kind) => (v ? h("div", { class: "cmp-row" }, h("span", { class: "lbl" }, lab), pbar(v, kind), h("span", { class: "nums" }, r3(v).replaceAll("·", " · "))) : null);
+  return [padCard(
+    minor ? line("Model", shown) : [line(bl ? "Harman" : "Piyasa", shown), bl ? line("Piyasa", mk) : null, line("Model", md, "model")],
+    !minor && !md ? h("p", { class: "bars-cap" }, "Kendi model bu maçta yok.") : null,
+    h("p", { class: "bars-cap" }, m.sport === "basketball" ? "Sıra: ev · deplasman." : "Sıra: 1 · X · 2.")), explain(m)];
+}
+const secTitle = (el) => { const t = el && el.querySelector && el.querySelector(":scope > .sec-h"); return t ? t.textContent : null; };
+function summaryAccs(m, wide) {
+  const minor = isMinor(m), nba = m.sport === "basketball";
+  const shown = probs3(m, "prob"), mk = probs3(m, "market_prob"), md = probs3(m, "model_prob");
+  const out = [];
+  const cmpSub = minor ? `Model ${r3(shown)}` : [md ? `Model ${r3(md)}` : "Model yok", mk ? `piyasa ${r3(mk)}` : null].filter(Boolean).join(" · ");
+  out.push(acc(nba ? "Model ve piyasa" : minor ? "Model" : "Model, piyasa, harman", cmpSub, () => compareBody(m), wide));
+  if (!nba && !minor) {
+    const t = m.odds_trend, pts = t && t.points;
+    out.push(acc("Oran hareketi", pts && pts.length > 1 ? `${fmtDayMonth(pts[0][0])}'dan beri` : "Oran henüz değişmedi",
+      () => [oddsChart(m).lastChild], wide));
+  }
+  const teams = teamsTab(m);
+  const pick = (names) => teams.filter((el) => names.includes(secTitle(el)) || (el.classList && el.classList.contains("foot") && names.includes("xG")));
+  if (nba) {
+    const i = m.nba_info;
+    const inj = i && i.injuries;
+    const names = inj ? ["home", "away"].flatMap((s) => (inj[s] || []).map((x) => x.name)) : [];
+    out.push(acc("Form, rating ve dinlenme", i && i.ratings && i.ratings.home ? `Net ${signedC(i.ratings.home.net)} – ${signedC(i.ratings.away.net)}` : null,
+      () => teams.filter((el) => secTitle(el) !== "Eksik oyuncular"), wide));
+    out.push(acc("Sakatlık raporu", !inj || inj.status === "no_report" ? "Rapor yok" : names.length ? names.slice(0, 3).join(", ") : "Eksik yok",
+      () => teams.filter((el) => secTitle(el) === "Eksik oyuncular" || el.classList.contains("empty")), wide));
+    return out;
+  }
+  const s = m.stats, xh = s && s.home && s.home.xg_form, xa = s && s.away && s.away.xg_form;
+  out.push(acc("İstatistik ve xG", xh || xa ? `xG ${xh ? fmtDec(xh.xg_for, 2) : "–"} – ${xa ? fmtDec(xa.xg_for, 2) : "–"} · korner, kart` : "korner, kart, gol yüzdeleri",
+    () => { const x = pick(["xG · son 5 maç ortalaması", "İstatistik", "xG"]); return x.length ? x : [h("p", { class: "empty-sm" }, "Bu maç için istatistik yok.")]; }, wide));
+  const j = m.injuries;
+  const missing = j ? ["home", "away"].flatMap((sd) => (j[sd] ? j[sd].missing : [])) : [];
+  const sub = [missing.length ? missing.slice(0, 3).join(", ") + (missing.length > 3 ? "…" : "") : j ? "Bildirilen eksik yok" : null,
+    m.info && m.info.table ? "puan durumu" : null].filter(Boolean).join(" · ");
+  out.push(acc("Eksikler, form ve puan durumu", sub || null, () => {
+    const x = pick(["Eksik oyuncular", "Form", "Puan durumu", "Aralarındaki son maçlar"]);
+    return x.length ? x : [h("p", { class: "empty-sm" }, "Bu maç için takım bilgisi yok.")];
+  }, wide));
+  return out;
+}
+const fmtDayMonth = (iso) => new Intl.DateTimeFormat("tr-TR", { timeZone: TZ, day: "numeric", month: "long" }).format(new Date(iso));
+function viewMatchSummary(root, id, from, opts) {
+  const wide = !!(opts && opts.wide);
+  const ref = byId.get(id);
+  const top = h("div", { class: "topnav" }, matchBack(from, wide), ref ? shareBtn(ref.match) : null);
+  if (!ref) { root.replaceChildren(top, h("p", { class: "empty" }, "Maç bulunamadı; veriler güncellenmiş olabilir.")); return; }
+  const m = ref.match;
+  const render = () => { const y = window.scrollY, dy = root.scrollTop; viewMatchSummary(root, id, from, opts); window.scrollTo(0, y); root.scrollTop = dy; };
+  const meta = h("p", { class: "qmeta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`);
+  const warn = isMinor(m) ? null : oddsWarning();
+  const main = [qHead(m)];
+  if (m.report) main.push(karneCard(m));
+  if (!isDone(m) && (m.sport === "basketball" || isMinor(m) || m.expected)) main.push(verdictCard(m), bestCard(m, render));
+  else main.push(h("a", { class: "lnk ball", href: matchHref(m.id, true) }, "Tüm ayrıntılar ›"));
+  const accs = summaryAccs(m, wide);
+  const body = wide ? [h("div", { class: "dgrid qgrid" }, h("div", { class: "dcol" }, main), h("div", { class: "dcol" }, accs))]
+    : [...main, h("div", { class: "accs" }, accs)];
+  root.replaceChildren(...[top, h("h1", { class: "sr" }, matchLabel(m)), meta, warn, ...body, note(isMinor(m))].filter(Boolean));
+}
+function viewMatchAll(root, id, from, opts) {
+  const wide = !!(opts && opts.wide); // masaüstü sağ sütun: geri bağlantısı yok, liste solda duruyor
+  const back = backLink(matchHref(id), "Maç özeti");
   const ref = byId.get(id);
   const top = h("div", { class: "topnav" }, back, ref ? shareBtn(ref.match) : null);
   if (!ref) { root.replaceChildren(top, h("p", { class: "empty" }, "Maç bulunamadı; veriler güncellenmiş olabilir.")); return; }
@@ -2484,7 +2693,10 @@ function resolveRoute(hash) {
   if (REDIRECTS[path]) return { redirect: REDIRECTS[path] };
   const dec = (x) => { try { return decodeURIComponent(x); } catch { return ""; } }; // bozuk adres → bulunamadı
   if (path === "#/" || path === "#" || path === "") return { view: "today", tab: "bugun" };
-  if (path.startsWith("#/mac/")) return { view: "match", tab: "bugun", id: dec(path.slice(6)) };
+  if (path.startsWith("#/mac/")) { // #/mac/<id> özet, #/mac/<id>/tum tüm seçenekler (id encodeURIComponent'li, "/" içermez)
+    const rest = path.slice(6), all = rest.endsWith("/tum");
+    return { view: "match", tab: "bugun", id: dec(all ? rest.slice(0, -4) : rest), all };
+  }
   if (path === "#/degerli") return { view: "value", tab: "degerli" };
   if (path === "#/degerli/tum") return { view: "options", tab: "degerli" };
   if (path === "#/kupon") return { view: "kupon", tab: "kupon" };
@@ -2543,10 +2755,10 @@ function route() {
       history.replaceState(null, "", lay.replaceHash);
       r = lastRoute = { view: "match", tab: "bugun", id: lay.detailId, from: "today" };
     }
-    routeSplit(root, lay.detailId, r.tab);
+    routeSplit(root, lay.detailId, r.tab, !!r.all);
     return;
   }
-  if (r.view === "match") viewMatch(root, r.id, r.from);
+  if (r.view === "match") viewMatch(root, r.id, r.from, { all: r.all });
   else if (r.view === "today") viewToday(root);
   else if (r.view === "league") viewLeague(root, r.id);
   else if (r.view === "kupon") viewKupon(root);
@@ -2573,7 +2785,7 @@ function setLayout(layout) {
   document.getElementById("side").hidden = layout === "mobile";
   listKey = null;
 }
-function routeSplit(root, id, tab) {
+function routeSplit(root, id, tab, all) {
   const key = `${state.sport}|${state.day}`;
   if (listKey !== key) {
     viewToday(root);
@@ -2582,7 +2794,7 @@ function routeSplit(root, id, tab) {
     root.scrollTop = 0;
     listKey = key;
   }
-  const href = id == null ? null : `#/mac/${encodeURIComponent(id)}`;
+  const href = id == null ? null : matchHref(id);
   let sel = null;
   root.querySelectorAll("a.mrow").forEach((a) => {
     const on = a.getAttribute("href") === href;
@@ -2590,10 +2802,11 @@ function routeSplit(root, id, tab) {
   });
   if (sel) sel.scrollIntoView({ block: "nearest" });
   const detail = document.getElementById("detail");
-  if (detail.dataset.id !== String(id)) {
+  const dkey = `${id}|${all ? "tum" : ""}`;
+  if (detail.dataset.id !== dkey) {
     if (id == null) detail.replaceChildren(h("p", { class: "empty" }, "Bu gün için maç yok."));
-    else viewMatch(detail, id, "today", { wide: true });
-    detail.dataset.id = String(id);
+    else viewMatch(detail, id, "today", { wide: true, all });
+    detail.dataset.id = dkey;
     detail.scrollTop = 0;
   }
 }
