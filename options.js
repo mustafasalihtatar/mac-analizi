@@ -27,14 +27,16 @@ const Options = (() => {
         const price = iddaa ?? (minor ? null : o.price ?? null);
         if (price == null) continue;
         const unverified = minor || !!o.unverified;
+        // §39 türetilmiş KG (gerçek KG oranı yok): satır görünür ama değer hesabına girmez (BD, gereken farkı, bant yok)
+        const derived = o.market === "btts" && o.market_src === "derived";
         const required = Iddaa.required(price);
-        const ev = Iddaa.expectedValue(o.prob, price);
-        const band = Iddaa.evBand(ev);
+        const ev = derived ? null : Iddaa.expectedValue(o.prob, price);
+        const band = derived ? null : Iddaa.evBand(ev);
         rows.push({ key: o.key, match: m.id, sport: m.sport === "basketball" ? "basketball" : "football", minor,
           competition: m.competition, kickoff: m.kickoff, day, home: m.home, away: m.away, pick: o.pick, market: o.market,
           group, line: o.line ?? null, prob: o.prob, price, src: iddaa != null ? ctx.source(m, o) || "iddaa" : "yurtdışı",
-          required, gap: required == null ? null : o.prob - required, ev, band: band && unverified ? "model" : band,
-          unverified, status: ctx.status(m, o), addable: !!o.addable || minor, option: o });
+          required, gap: required == null || derived ? null : o.prob - required, ev, band: band && unverified ? "model" : band,
+          unverified, derived, status: ctx.status(m, o), addable: !!o.addable || minor, option: o });
       }
     }
     return rows;

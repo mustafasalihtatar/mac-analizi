@@ -51,7 +51,7 @@ const Value = (() => {
       for (const key of Object.keys(rec.odds || {})) {
         if (listed.has(key)) continue;
         const o = (m.options || []).find((x) => x.key === key);
-        if (!o) continue;
+        if (!o || (o.market === "btts" && o.market_src === "derived")) continue; // §39 türetilmiş KG Değerli'ye girmez
         const r = rowFromOption(m, o, store);
         if (r.iddaa == null) continue;
         (r.minor ? minor : rows).push(r);

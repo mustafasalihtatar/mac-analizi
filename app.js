@@ -976,6 +976,8 @@ function evText(ev, model) {
 }
 /* iddaa oranı kutusu + beklenen değer yazısı (maç detayı ve Değerli ortak). minor: doğrulanmamış model → renk yok.
    Kutudaki oran: elle girilen, yoksa otomatik çekilen (§34). Altında "gereken %X · tahmin %Y · elle|iddaa". */
+/* §39 KG'de gerçek KG oranı yoksa piyasa 1X2 + alt/üst'ten türetilmiştir: gösterilir, değer hesabına girmez. */
+const isDerived = (o) => o.market === "btts" && o.market_src === "derived";
 function iddaaField(m, o, minor, onLive) {
   const effective = () => iddaaOf(m.id, o.key);
   const evEl = h("span", { class: "opt-ev", "aria-live": "polite" });
@@ -996,7 +998,7 @@ function iddaaField(m, o, minor, onLive) {
       evEl.replaceChildren("Geçersiz: 1'den büyük oran yaz");
       return undefined;
     }
-    const lab = evText(Iddaa.expectedValue(o.prob, v), minor);
+    const lab = isDerived(o) ? null : evText(Iddaa.expectedValue(o.prob, v), minor);
     if (lab) {
       evEl.className = `opt-ev${lab.band === "value" ? " good" : lab.band === "low" ? " bad" : ""}`;
       if (lab.band === "value") input.classList.add("good");
@@ -1004,7 +1006,7 @@ function iddaaField(m, o, minor, onLive) {
     } else evEl.replaceChildren();
     const man = Iddaa.manual(state.iddaa, m.id, o.key), auto = Iddaa.autoOdds(state.iddaa, m.id, o.key);
     const tag = man == null && auto != null && v === auto ? "iddaa" : "elle";
-    reqEl.replaceChildren(`gereken ${pct(Iddaa.required(v))} · tahmin ${pct(o.prob)}${minor ? " (doğrulanmamış)" : ""} · `,
+    reqEl.replaceChildren(`gereken ${pct(Iddaa.required(v))} · tahmin ${pct(o.prob)}${minor ? " (doğrulanmamış)" : isDerived(o) ? " (türetilmiş, değer hesaplanmaz)" : ""} · `,
       h("span", { class: `src ${tag === "iddaa" ? "auto" : "man"}` }, tag));
     return v;
   };
@@ -1029,12 +1031,13 @@ function optRow(m, o, render, opts) {
   const minor = isMinor(m) || !!o.unverified; // §34 NBA'de Odds API'de olmayan iddaa çizgisi: sadece model, piyasa yok
   const { input, evEl } = iddaaField(m, o, minor, onLive);
   const d = diffOf(o);
-  const flag = !minor && !big && d != null && Math.abs(d) >= EDGE;
+  const derived = isDerived(o);
+  const flag = !minor && !big && !derived && d != null && Math.abs(d) >= EDGE;
   const blendDiff = !minor && o.market === "h2h" && blendOn(m) && o.market_prob != null && Math.abs(o.prob - o.market_prob) > 0.0005;
   // MS'de olasılık yukarıdaki büyük rakamlarda; diğer pazarlarda satırda yazılır
   const sub = o.unverified ? `Model ${pct(o.prob)} · piyasa yok · Adil ${odds(o.fair)}`
     : minor ? `Model ${pct(o.prob)} · Adil ${odds(o.fair)}`
-    : `${big ? "" : `${blendDiff ? `Harman ${pct(o.prob)}` : pct(o.prob)}${o.model_prob != null ? ` (model ${pct(o.model_prob)})` : ""} · `}Adil ${odds(o.fair)} · Yurtdışı ${o.price ? odds(o.price) : "–"}`;
+    : `${big ? "" : `${blendDiff ? `Harman ${pct(o.prob)}` : pct(o.prob)}${o.model_prob != null ? ` (model ${pct(o.model_prob)})` : ""} · `}Adil ${odds(o.fair)} · ${derived ? "piyasa türetilmiş" : `Yurtdışı ${o.price ? odds(o.price) : "–"}`}`;
   const can = o.addable || minor;
   const inK = inKupon(o.key);
   // Kupona eklenemeyen seçenek (çeyrek çizgi): düğme yok, iddaa oranı ve beklenen değer yine çalışır. Çifte şans eklenir
@@ -1047,7 +1050,7 @@ function optRow(m, o, render, opts) {
     h("div", { class: "opt-main" },
       h("div", { class: "opt-pick" }, big ? h("span", { class: "k", "aria-hidden": "true" }, big) : null,
         big ? h("span", { class: "sr" }, o.pick) : o.pick,
-        flag ? badge(`Model ${pts(d)}`, "accent", "xs") : null, add),
+        flag ? badge(`Model ${pts(d)}`, "accent", "xs") : null, derived ? badge("türetilmiş", "warn", "xs") : null, add),
       h("span", { class: "opt-sub" }, sub),
       evEl),
     h("label", { class: "opt-in" }, h("span", { class: "sr" }, `${o.pick} iddaa oranı`), input)) };
@@ -1190,7 +1193,12 @@ function goalsTab(m, render) {
   const tot = m.options.filter((o) => o.market === "totals");
   out.push(lineGroup(m, "Alt / üst", tot, render, (o) => o.line, (l) => `${fmtLine(l)} gol`, 2.5));
   const btts = m.options.filter((o) => o.market === "btts");
-  if (btts.length) out.push(sec("Karşılıklı gol", optionsCard(m, btts, render).el));
+  if (btts.length) {
+    const kgNote = minor ? null : btts.some(isDerived)
+      ? "Bu maçta KG oranı yok: piyasa 1X2 ve alt/üst oranlarından türetildi. Kupona eklenmez, değer hesaplanmaz."
+      : "Piyasa: bahis şirketlerinin KG oranı (marjsız).";
+    out.push(sec("Karşılıklı gol", optionsCard(m, btts, render).el, kgNote ? h("p", { class: "sec-note" }, kgNote) : null));
+  }
   const ts = m.stats && m.stats.top_scores;
   if (ts && ts.length) {
     out.push(sec("En olası skorlar", padCard(h("div", { class: "scores" }, ts.map((t) => h("div", { class: "sc" }, h("b", {}, t.score), h("span", {}, pct(t.p)))))),
@@ -1547,7 +1555,7 @@ const valueBadge = (r) => {
 };
 const srcTag = (r) => h("span", { class: `src ${SRC_CLS[r.src] || ""}` }, r.src);
 const matchLink = (r) => h("a", { class: "vmatch", href: `#/mac/${encodeURIComponent(r.match)}` }, `${r.home} – ${r.away}`, " ›");
-const reqText = (r) => `gereken ${pct(r.required)} · tahmin ${pct(r.prob)}${r.unverified ? " (doğrulanmamış)" : ""}`;
+const reqText = (r) => `gereken ${pct(r.required)} · tahmin ${pct(r.prob)}${r.unverified ? " (doğrulanmamış)" : r.derived ? " (türetilmiş, değer hesaplanmaz)" : ""}`;
 function optionItem(r, render) {
   return h("div", { class: "orow row" },
     h("div", { class: "orow-main" },
@@ -1576,7 +1584,7 @@ function optionTable(rows, f, change, render) {
       h("td", { class: "pk" }, r.pick),
       h("td", { class: "r" }, h("b", { class: "num" }, odds(r.price)), srcTag(r)),
       h("td", { class: "r" }, pct(r.required)),
-      h("td", { class: "r" }, pct(r.prob), r.unverified ? h("small", {}, "doğrulanmamış") : null),
+      h("td", { class: "r" }, pct(r.prob), r.unverified ? h("small", {}, "doğrulanmamış") : r.derived ? h("small", {}, "türetilmiş") : null),
       h("td", {}, valueBadge(r) || h("span", { class: "muted" }, "–")),
       h("td", { class: "r" }, addBtnFor(r, render)))))));
 }
