@@ -937,11 +937,7 @@ function matchBack(from, wide) {
     : from === "options" ? backLink("#/degerli/tum", "Tüm seçenekler") : backLink("#/", "Bugün");
 }
 /* Üst kartın takım bloğu: ad, son 5 form, "14. · 12 puan". */
-function teamRank(m, side) {
-  const t = m.info && m.info.table, src = m.info && m.info[`${side}_src`];
-  const r = t && src && t.find((x) => x["Takım"] === src);
-  return r ? `${r["Sıra"]}. · ${r.P} puan` : null;
-}
+const teamRank = (m, side) => Decide.rankText(m.info, side);
 function formOf(m, side) {
   if (m.sport === "basketball") return m.nba_info && m.nba_info.form ? m.nba_info.form[side] : null;
   return m.info ? m.info[`${side}_form`] : null;
@@ -956,35 +952,17 @@ function qTeam(m, side) {
 /* 1-X-2 barı: parçaların içinde yüzde (dar parçada yazı yok, altta isimlerle yine yazılır). */
 function qBar(m, vals) {
   const outs = outsOf(m), cls = { home: "h", draw: "d", away: "a" };
-  const name = (k) => (k === "draw" ? "Beraberlik" : m[k]);
+  const names = outs.map((k) => (k === "draw" ? "Beraberlik" : m[k]));
+  const labs = Decide.barLabels(vals, names);
   return h("div", { class: "qbar-wrap" },
-    h("div", { class: "qbar", role: "img", "aria-label": outs.map((k, i) => `${name(k)} %${Math.round(vals[i] * 100)}`).join(", ") },
-      outs.map((k, i) => h("span", { class: `qseg ${cls[k]}`, style: `flex-grow:${Math.max(vals[i], 0.001)}`, "aria-hidden": "true" },
-        vals[i] >= 0.12 ? `%${Math.round(vals[i] * 100)}` : ""))),
-    h("div", { class: "qbar-names", "aria-hidden": "true" }, outs.map((k, i) => h("span", {}, vals[i] < 0.12 ? `${name(k)} %${Math.round(vals[i] * 100)}` : name(k)))));
+    h("div", { class: "qbar", role: "img", "aria-label": outs.map((k, i) => `${names[i]} %${Math.round(vals[i] * 100)}`).join(", ") },
+      outs.map((k, i) => h("span", { class: `qseg ${cls[k]}`, style: `flex-grow:${Math.max(vals[i], 0.001)}`, "aria-hidden": "true" }, labs[i].inside))),
+    h("div", { class: "qbar-names", "aria-hidden": "true" }, labs.map((l) => h("span", {}, l.below))));
 }
 function qTile(label, big, small) {
   return h("div", { class: "qtile" }, h("small", {}, label), h("b", {}, big), small ? h("span", {}, small) : null);
 }
-function qTiles(m) {
-  const e = m.expected || {}, nba = m.sport === "basketball";
-  if (nba) {
-    const j = m.nba_info && m.nba_info.injuries;
-    const n = (s) => (j && j[s] ? j[s].length : 0);
-    return [qTile("Beklenen fark", e.margin == null ? "–" : signedC(e.margin), "ev sahibi"),
-      qTile("Toplam sayı", e.total == null ? "–" : fmtDec(e.total), "uzatmalar dahil"),
-      qTile("Eksikler", j && j.status !== "no_report" ? `${n("home")} · ${n("away")}` : "–",
-        !j || j.status === "no_report" ? "rapor yok" : j.effect ? `fark etkisi ${signedC(j.effect)}` : "etki yok")];
-  }
-  const ts = (m.stats && m.stats.top_scores) || [];
-  const dash2 = (s) => s.replace("-", "–");
-  const j = m.injuries;
-  const miss = (s) => (j && j[s] ? j[s].missing.length : 0);
-  const hit = j ? (miss("home") > miss("away") ? m.home : miss("away") > miss("home") ? m.away : null) : null;
-  return [qTile("En olası skor", ts.length ? dash2(ts[0].score) : "–", ts.length > 1 ? ts.slice(1, 3).map((t) => dash2(t.score)).join(" · ") : null),
-    qTile("Beklenen gol", e.home == null ? "–" : `${fmtDec(e.home)}–${fmtDec(e.away)}`, e.home == null ? null : `toplam ${fmtDec(e.home + e.away)}`),
-    qTile("Eksikler", j ? `${miss("home")} · ${miss("away")}` : "–", !j ? "veri yok" : hit ? `${hit} etkilenir` : "denk")];
-}
+const qTiles = (m) => Decide.tiles(m).map((t) => qTile(t.label, t.big, t.small));
 function sourceTag(m) {
   const src = isMinor(m) ? "Sadece model (doğrulanmamış)" : blendOn(m) ? "Piyasa + model (harman)" : "Piyasa";
   return h("p", { class: "qsrc" }, `${src} · analiz ${fmtStamp(DATA.generated_at)}`);
@@ -1005,35 +983,15 @@ function qHead(m) {
     isDone(m) ? null : h("div", { class: "qtiles" }, qTiles(m)),
     sourceTag(m));
 }
-const BAND_BADGE = { play: ["Oynanabilir", "good"], close: ["Yakın ama eksi", "warn"], skip: ["iddaa'da oynama", "bad"],
-  none: ["iddaa oranı yok", "muted"], minor: ["Doğrulanmamış model", "muted"], started: ["Maç başladı", "muted"] };
-const pct1 = (x) => `%${(x * 100).toFixed(1).replace(".", ",").replace(",0", "")}`;
 function verdictCard(m) {
-  const v = Decide.verdict(m, decideCtx);
-  const [bt, bk] = BAND_BADGE[v.band];
-  const head = h("div", { class: "vhead" }, h("p", { class: "eyebrow" }, "Karar"), badge(bt, bk));
+  const v = Decide.verdict(m, decideCtx), w = Decide.verdictView(v, iddaaAutoOn());
   const all = h("a", { class: "lnk", href: matchHref(m.id, true) }, "Tüm seçenekler ›");
-  if (v.band === "started") return h("section", { class: "card pad verdict", "aria-label": "Karar" }, head,
-    h("p", { class: "vtext" }, "Maç başladı; iddaa'nın canlı oranı sitede yok, karar verilmez."));
-  if (v.band === "minor") return h("section", { class: "card pad verdict", "aria-label": "Karar" }, head,
-    h("p", { class: "vtext" }, "Bu ligde sadece kendi modelimiz var ve doğrulanmadı; iddaa değeri hesaplanmaz."),
-    h("p", { class: "vnote" }, "iddaa oranını Tüm seçenekler'de yazarsan gereken olasılığı görürsün. ", all));
-  if (v.band === "none") return h("section", { class: "card pad verdict", "aria-label": "Karar" }, head,
-    h("p", { class: "vtext" }, "Bu maç için iddaa oranı bulunamadı."),
-    h("p", { class: "vnote" }, iddaaAutoOn() ? "Bülten bu maçı henüz açmamış olabilir. " : "Otomatik iddaa çekme kapalı. ",
-      "Oranı elle girebilirsin: ", all));
-  const pick = v.option.pick;
-  const text = v.band === "play" ? `En iyi seçenek ${pick}; iddaa oranı yeterli.`
-    : v.band === "close" ? `En iyi seçenek ${pick}; iddaa oranı biraz düşük.` : `En iyi seçenek bile ${pick}; iddaa oranı çok düşük.`;
-  const evCls = v.band === "play" ? "good-t" : "bad-t";
-  return h("section", { class: "card pad verdict", "aria-label": "Karar" }, head,
-    h("p", { class: "vtext" }, text),
-    h("div", { class: "vboxes" },
-      h("div", {}, h("small", {}, "Bizim"), h("b", {}, pct(v.prob))),
-      h("div", {}, h("small", {}, "Gereken"), h("b", {}, pct1(v.required))),
-      h("div", {}, h("small", {}, `iddaa ${odds(v.price)}`), h("b", { class: evCls }, Iddaa.formatPct(v.ev)))),
-    h("p", { class: "vnote" }, v.band === "play" ? `Oran ${odds(v.breakEven)} altına düşerse değer kalmaz.`
-      : `Oran ${odds(v.breakEven)} ve üstüne çıkarsa artıya geçer.`));
+  return h("section", { class: "card pad verdict", "aria-label": "Karar" },
+    h("div", { class: "vhead" }, h("p", { class: "eyebrow" }, "Karar"), badge(w.badge, w.kind)),
+    h("p", { class: "vtext" }, w.text),
+    w.boxes ? h("div", { class: "vboxes" }, w.boxes.map((b, i) => h("div", {}, h("small", {}, b.label),
+      h("b", { class: i === 2 ? (b.good ? "good-t" : "bad-t") : null }, b.value)))) : null,
+    w.note ? h("p", { class: "vnote" }, w.note, v.band === "none" || v.band === "minor" ? [" ", all] : null) : null);
 }
 const BEST_SORTS = [["value", "Getiriye göre"], ["prob", "Olasılığa göre"], ["odds", "Orana göre"]];
 function bestCard(m, render) {
@@ -1624,57 +1582,75 @@ const fmtShortWhen = (iso) => {
   const d = new Date(iso);
   return `${new Intl.DateTimeFormat("tr-TR", { timeZone: TZ, weekday: "short" }).format(d)} ${fmtTime(iso)}`;
 };
-function valueRow(r) {
-  const ref = byId.get(r.match);
-  const m = ref && ref.match, o = m && m.options.find((x) => x.key === r.key);
-  const mv = Value.move(r);
-  const bars = r.minor ? [["Model", r.model_prob, "fill-model", true]]
-    : [["Piyasa", r.market_prob, "fill-market"], ["Model", r.model_prob, "fill-model", true]];
-  if (!r.minor && r.blend_prob != null) bars.push(["Harman", r.blend_prob, "fill-dim"]);
-  const field = m && o ? iddaaField(m, o, r.minor, null) : null;
-  const tags = [
-    r.diff != null ? badge(`${r.diff > 0 ? "+" : "−"}${fmtDec(Math.abs(r.diff) * 100)} puan`, r.diff > 0 && !r.below ? "accent" : null) : null,
-    r.minor ? badge("doğrulanmamış model", "muted") : r.below ? badge("eşik altı", "muted") : null,
-    r.group ? badge(r.group, "plain") : null,
-    r.minor ? badge(`Adil ${odds(r.fair)}`, "plain") : badge(`Yurtdışı ${odds(r.price)}`, "plain"),
-    !r.minor ? badge(`Adil ${odds(r.fair)}`, "plain muted") : null,
-    mv ? badge(`Oran ${odds(mv.first)} → ${odds(mv.last)}${mv.sourceChanged ? ` (kaynak değişti, hareket ${signedPct(mv.change)})` : ""}`, "plain muted") : null,
-  ];
-  return h("div", { class: "vrow row" },
-    h("div", { class: "vtop" }, h("span", { class: "vpick" }, r.pick), h("span", { class: "when" }, fmtShortWhen(r.kickoff))),
-    h("a", { class: "vmatch", href: `#/mac/${encodeURIComponent(r.match)}` }, `${r.home} – ${r.away}`, " ›"),
-    cmpBars(bars),
-    h("div", { class: "tags" }, tags),
-    r.group === "Alt/Üst" ? h("p", { class: "opt-sub" }, UNDER_NOTE) : null,
-    field ? h("div", { class: "vin" }, h("div", { class: "opt-main" }, h("span", { class: "opt-sub" }, "iddaa oranın"), field.evEl),
-      h("label", { class: "opt-in" }, h("span", { class: "sr" }, `${r.pick} iddaa oranı`), field.input)) : null);
+/* §40 Değerli kartı: seçim, saat, maç; etiketler (Model +X, iddaa oranı, değer, Alt eğilimi) — tüm kart maç detayına gider. */
+const TAG_CLS = { accent: "accent", plain: "plain", good: "good", bad: "bad", warn: "warn" };
+function valueCard(r) {
+  const tags = Decide.valueTags(r);
+  return h("a", { class: "vcard row", href: matchHref(r.match),
+    "aria-label": `${r.pick}. ${r.home} – ${r.away}, ${fmtShortWhen(r.kickoff)}. ${tags.map((t) => t.text.replace(" ⚠", "")).join(", ")}` },
+  h("div", { class: "vtop", "aria-hidden": "true" }, h("span", { class: "vpick" }, r.pick), h("span", { class: "when" }, fmtShortWhen(r.kickoff))),
+  h("span", { class: "vteams", "aria-hidden": "true" }, `${r.home} – ${r.away}`),
+  h("div", { class: "tags", "aria-hidden": "true" }, tags.map((t) => badge(t.text, TAG_CLS[t.kind], "xs"))));
+}
+/* İlk 3 kart, sonra "N seçenek daha göster" (açık/kapalı bellekte, bölüm başına). */
+function valueList(rows, key, render) {
+  const more = state.vmore || (state.vmore = {});
+  const open = !!more[key], shown = open ? rows : rows.slice(0, 3);
+  const btn = rows.length > 3 ? h("button", { type: "button", class: "vmore row", "aria-expanded": open,
+    onclick: () => { more[key] = !open; render(); } }, open ? "Daha az göster" : `${rows.length - 3} seçenek daha göster`) : null;
+  return card(shown.map(valueCard), btn);
+}
+function iddaaStamp() {
+  const st = loadIddaaStatus(), t = ["football", "basketball"].map((sp) => st[sp] && st[sp].lastOk).filter(Boolean).sort().pop();
+  return iddaaAutoOn() && t ? `iddaa oranları ${fmtStamp(t)}` : iddaaAutoOn() ? "iddaa oranı henüz çekilmedi" : "otomatik iddaa çekme kapalı";
 }
 function viewValue(root) {
   const v = DATA.value;
-  const render = () => viewValue(root);
+  const render = () => { const y = window.scrollY; viewValue(root); window.scrollTo(0, y); };
   const thr = v ? Math.round(v.threshold * 100) : 4;
-  const head = (seg) => h("header", { class: "hd" }, h("h1", { class: "title" }, "Değerli"), valueListSeg("value"),
-    h("p", { class: "lede" }, `Modelin piyasadan en az ${thr} puan ayrıldığı seçenekler. Kazanç garantisi değildir.`), seg);
-  if (!v) { root.replaceChildren(head(null), h("p", { class: "empty" }, "Bu yayında liste yok."), note()); return; }
+  const head = (seg) => h("header", { class: "hd tight" }, h("h1", { class: "title" }, "Değerli"),
+    h("p", { class: "lede" }, `${iddaaStamp()} · model piyasadan ≥${thr} puan ayrılanlar`), seg);
+  if (!v) { root.replaceChildren(head(null), h("p", { class: "empty" }, "Bu yayında Değerli listesi yok.")); return; }
   const { rows, minor } = Value.build(v.picks, state.iddaa, (id) => (byId.get(id) || {}).match, new Date());
-  const fb = rows.filter((r) => r.sport !== "basketball"), nb = rows.filter((r) => r.sport === "basketball");
-  if (!state.vsport) state.vsport = !fb.length && !minor.length && nb.length ? "basketball" : "football";
+  const isNba = (r) => r.sport === "basketball";
+  const visible = (list) => Decide.valueSections(list).play.length + Decide.valueSections(list).rest.length;
+  const fb = rows.filter((r) => !isNba(r)), nb = rows.filter(isNba);
+  if (!state.vsport) state.vsport = !visible(fb) && visible(nb) ? "basketball" : "football";
   const cur = state.vsport;
-  const kids = [head(segmented("Spor", [["football", `Futbol · ${fb.length}`], ["basketball", `NBA · ${nb.length}`]], cur,
-    (x) => { state.vsport = x; render(); }))];
-  const list = cur === "basketball" ? nb : fb;
-  const vleft = [];
-  vleft.push(sec("Seçenekler", list.length ? card(list.map(valueRow))
-    : padCard(h("p", { class: "muted" }, "Şu an eşiği geçen seçenek yok.")),
-  h("p", { class: "sec-note" }, "Beklenen değeri pozitif olanlar (iddaa oranı girdiklerin) en üstte, sonra farka göre. ",
-    "Adil oran = 1 ÷ model olasılığı; beklenen değer sitede gösterilen olasılıkla. iddaa oranı girdiğin ama eşik altında kalan ",
-    "seçenekler \"eşik altı\" etiketiyle görünür.")));
-  if (cur === "football" && minor.length) {
-    vleft.push(sec("Diğer ligler · doğrulanmamış model", card(minor.map(valueRow)),
-      h("p", { class: "sec-note" }, "Bu liglerde piyasa olasılığı yok; sadece iddaa oranı girdiğin seçenekler, model olasılığıyla. Takibe girmez.")));
+  const list = cur === "basketball" ? nb : cur === "football" ? fb : rows;
+  const sx = Decide.valueSections(list);
+  const seg = segmented("Spor", [["football", `Futbol · ${visible(fb)}`], ["basketball", `NBA · ${visible(nb)}`], ["all", "Tümü"]], cur,
+    (x) => { state.vsport = x; render(); });
+  const empty = (title, text, link) => h("div", { class: "card pad vempty" }, h("p", { class: "sum-title" }, title),
+    h("p", { class: "vnote" }, text, link ? [" ", link] : null));
+  const left = [
+    sec(`iddaa'da oynanabilir · ${sx.play.length}`, sx.play.length ? valueList(sx.play, `${cur}:play`, render)
+      : sx.anyIddaa ? empty("Şu an iddaa oranıyla artı değerli seçenek yok.", "Oranlar değişince burası dolar.")
+        : empty("iddaa oranı bulunamadı.", iddaaAutoOn() ? "Bülten bu maçları henüz açmamış olabilir ya da çekme başarısız oldu."
+          : "Otomatik iddaa çekme kapalı.", h("a", { class: "lnk", href: "#/ayarlar" }, "Ayarlar ›"))),
+    sec(`Model ayrılıyor, iddaa karşılamıyor · ${sx.rest.length}`, sx.rest.length ? valueList(sx.rest, `${cur}:rest`, render)
+      : empty("Başka seçenek yok.", "Modelin piyasadan ayrıldığı diğer seçenekler burada görünür.")),
+  ];
+  if (cur !== "basketball" && minor.length) {
+    left.push(sec(`Diğer ligler · doğrulanmamış · ${minor.length}`, valueList(minor, `${cur}:minor`, render),
+      h("p", { class: "sec-note" }, "Bu liglerde piyasa yok; sadece iddaa oranı girilmiş seçenekler, model olasılığıyla. Takibe girmez.")));
   }
-  kids.push(twoCol(vleft, [valueTracking(v)]), h("p", { class: "foot" }, VALUE_NOTE), note());
-  root.replaceChildren(...kids);
+  if (list.some((r) => r.sport !== "basketball" && r.market === "totals" && r.outcome === "under")) {
+    left.push(h("p", { class: "foot" }, `Alt eğilimi ⚠: ${UNDER_NOTE}`));
+  }
+  left.push(h("a", { class: "lnk strong", href: "#/degerli/tum", style: "margin:0 6px" }, "Tüm seçenekler ›"));
+  root.replaceChildren(head(seg), twoCol(left, [valueTrackCard(v)]), h("p", { class: "foot" }, VALUE_NOTE));
+}
+/* Takip özeti: tek satır üç sayı + Güvenilir rozeti; döküm (eski tablo) açılır. */
+function valueTrackCard(v) {
+  const s = Decide.trackSummary(v.tracking);
+  if (!s) return sec("Takip", padCard(h("p", { class: "muted" }, "Henüz sonuçlanmış seçenek yok. Her yayında listeye girenler o anki olasılık ve oranlarla kaydedilir.")));
+  const num = (big, lab, cls) => h("div", { class: "tnum" }, h("b", { class: cls || null }, big), h("small", {}, lab));
+  return h("section", { class: "card pad vtrack", "aria-label": "Takip" },
+    h("div", { class: "vhead" }, h("p", { class: "eyebrow" }, "Takip"), s.reliable ? badge("Güvenilir", "good") : badge("Henüz güvenilir değil", "muted")),
+    h("div", { class: "tnums" }, num(fmtInt(s.settled), "sonuçlandı"), num(s.hit, "tuttu"),
+      num(s.roi, "birim kazanç · yurtdışı oranla", s.roiGood == null ? null : s.roiGood ? "good-t" : "bad-t")),
+    h("details", { class: "more tdet" }, h("summary", {}, "Türlere göre döküm ›"), valueTracking(v).lastChild));
 }
 function valueTracking(v) {
   const t = v.tracking;
@@ -2694,8 +2670,8 @@ function resolveRoute(hash) {
   const dec = (x) => { try { return decodeURIComponent(x); } catch { return ""; } }; // bozuk adres → bulunamadı
   if (path === "#/" || path === "#" || path === "") return { view: "today", tab: "bugun" };
   if (path.startsWith("#/mac/")) { // #/mac/<id> özet, #/mac/<id>/tum tüm seçenekler (id encodeURIComponent'li, "/" içermez)
-    const rest = path.slice(6), all = rest.endsWith("/tum");
-    return { view: "match", tab: "bugun", id: dec(all ? rest.slice(0, -4) : rest), all };
+    const p = Decide.parseMatchPath(path.slice(6));
+    return { view: "match", tab: "bugun", id: dec(p.raw), all: p.all };
   }
   if (path === "#/degerli") return { view: "value", tab: "degerli" };
   if (path === "#/degerli/tum") return { view: "options", tab: "degerli" };

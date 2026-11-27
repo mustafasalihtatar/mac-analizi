@@ -101,7 +101,103 @@ const Decide = (() => {
     return { state: "none", count: 0, top: [], nearest: { ...c[0], breakEven: breakEven(c[0].prob) } };
   }
 
-  return { PLAY, CLOSE, BAND_TEXT, breakEven, bandOf, liveCount, isLive, headline, verdict, matchBand, bestOptions, daySummary };
+  /* ---------- §40 Aşama 2: maç detayı metinleri (DOM'suz) ---------- */
+  const fx = (x, d) => Number(x).toFixed(d).replace(".", ",");
+  const signed1 = (x) => (x > 0 ? "+" : x < 0 ? "−" : "±") + fx(Math.abs(x), 1);
+  const pctInt = (p) => `%${Math.round(p * 100)}`;
+  const pctOne = (p) => `%${fx(p * 100, 1).replace(/,0$/, "")}`;
+  const signedPct = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}%${fx(Math.abs(x) * 100, 1).replace(/,0$/, "")}`;
+
+  /* "#/mac/" sonrası: "<id>" özet, "<id>/tum" tüm seçenekler. id encodeURIComponent'li ("/" içermez). */
+  function parseMatchPath(rest) {
+    const all = rest.endsWith("/tum");
+    return { raw: all ? rest.slice(0, -4) : rest, all };
+  }
+  /* Üst kartta "14. · 12 puan": info.table'da takımın satırı (info.<side>_src adıyla); yoksa null. */
+  function rankText(info, side) {
+    const t = info && info.table, src = info && info[`${side}_src`];
+    const r = t && src && t.find((x) => x["Takım"] === src);
+    return r ? `${r["Sıra"]}. · ${r.P} puan` : null;
+  }
+  /* 1-X-2 barı: %12 ve üstü parçanın içinde yüzde; daha darında içi boş, alttaki adın yanında yüzde. */
+  const BAR_MIN = 0.12;
+  function barLabels(probs, names) {
+    return probs.map((p, i) => ({ inside: p >= BAR_MIN ? pctInt(p) : "", below: p >= BAR_MIN ? names[i] : `${names[i]} ${pctInt(p)}` }));
+  }
+  /* Üst karttaki 3 kutu: [{label, big, small|null}]. Futbol: en olası skor (+2 alternatif), beklenen gol, eksikler.
+     NBA: beklenen fark, toplam sayı, eksikler (resmi rapor). */
+  function tiles(m) {
+    const e = m.expected || {};
+    if (m.sport === "basketball") {
+      const j = m.nba_info && m.nba_info.injuries;
+      const ok = !!j && j.status !== "no_report";
+      const n = (s) => (j && j[s] ? j[s].length : 0);
+      return [{ label: "Beklenen fark", big: e.margin == null ? "–" : signed1(e.margin), small: "ev sahibi" },
+        { label: "Toplam sayı", big: e.total == null ? "–" : fx(e.total, 1), small: "uzatmalar dahil" },
+        { label: "Eksikler", big: ok ? `${n("home")} · ${n("away")}` : "–",
+          small: !ok ? "rapor yok" : j.effect ? `fark etkisi ${signed1(j.effect)}` : "etki yok" }];
+    }
+    const ts = (m.stats && m.stats.top_scores) || [];
+    const sc = (s) => s.replace("-", "–");
+    const j = m.injuries;
+    const miss = (s) => (j && j[s] ? j[s].missing.length : 0);
+    const hit = j ? (miss("home") > miss("away") ? m.home : miss("away") > miss("home") ? m.away : null) : null;
+    return [{ label: "En olası skor", big: ts.length ? sc(ts[0].score) : "–", small: ts.length > 1 ? ts.slice(1, 3).map((t) => sc(t.score)).join(" · ") : null },
+      { label: "Beklenen gol", big: e.home == null ? "–" : `${fx(e.home, 1)}–${fx(e.away, 1)}`, small: e.home == null ? null : `toplam ${fx(e.home + e.away, 1)}` },
+      { label: "Eksikler", big: j ? `${miss("home")} · ${miss("away")}` : "–", small: !j ? "veri yok" : hit ? `${hit} etkilenir` : "denk" }];
+  }
+  /* KARAR kartının metinleri. auto: otomatik iddaa çekme açık mı (oran yoksa nedeni). */
+  const BADGES = { play: ["Oynanabilir", "good"], close: ["Yakın ama eksi", "warn"], skip: ["iddaa'da oynama", "bad"],
+    none: ["iddaa oranı yok", "muted"], minor: ["Doğrulanmamış model", "muted"], started: ["Maç başladı", "muted"] };
+  function verdictView(v, auto) {
+    const [badge, kind] = BADGES[v.band];
+    const base = { badge, kind, boxes: null, note: null };
+    if (v.band === "started") return { ...base, text: "Maç başladı; iddaa'nın canlı oranı sitede yok, karar verilmez." };
+    if (v.band === "minor") return { ...base, text: "Bu ligde sadece kendi modelimiz var ve doğrulanmadı; iddaa değeri hesaplanmaz.",
+      note: "iddaa oranını Tüm seçenekler'de yazarsan gereken olasılığı görürsün." };
+    if (v.band === "none") return { ...base, text: "Bu maç için iddaa oranı bulunamadı.",
+      note: `${auto ? "Bülten bu maçı henüz açmamış olabilir." : "Otomatik iddaa çekme kapalı."} Oranı elle girebilirsin:` };
+    const pick = v.option.pick;
+    return { ...base,
+      text: v.band === "play" ? `En iyi seçenek ${pick}; iddaa oranı yeterli.`
+        : v.band === "close" ? `En iyi seçenek ${pick}; iddaa oranı biraz düşük.` : `En iyi seçenek bile ${pick}; iddaa oranı çok düşük.`,
+      boxes: [{ label: "Bizim", value: pctInt(v.prob) }, { label: "Gereken", value: pctOne(v.required) },
+        { label: `iddaa ${fx(v.price, 2)}`, value: signedPct(v.ev), good: v.band === "play" }],
+      note: v.band === "play" ? `Oran ${fx(v.breakEven, 2)} altına düşerse değer kalmaz.` : `Oran ${fx(v.breakEven, 2)} ve üstüne çıkarsa artıya geçer.` };
+  }
+
+  /* ---------- §40 Aşama 3: Değerli ---------- */
+  /* Value.build satırları iki bölüme: play = iddaa değeri ≥ +%2 (eşik altı "below" satırlar dahil: iddaa'da değerli);
+     rest = modelin ayrıldığı (listedeki) ama iddaa'nın karşılamadığı ya da iddaa oranı olmayanlar. Sıra Value.build'inki. */
+  function valueSections(rows) {
+    const play = [], rest = [];
+    for (const r of rows || []) {
+      if (r.ev != null && r.ev >= PLAY - EPS) play.push(r);
+      else if (!r.below) rest.push(r);
+    }
+    return { play, rest, anyIddaa: (rows || []).some((r) => r.iddaa != null) };
+  }
+  const signedInt = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}%${Math.round(Math.abs(x) * 100)}`;
+  /* Kart etiketleri: [{text, kind}] — kind: accent (model farkı) | plain | good | bad | warn. Renk her zaman yazıyla. */
+  function valueTags(r) {
+    const tags = [];
+    if (r.diff != null) tags.push({ text: `Model ${r.diff > 0 ? "+" : "−"}${Math.round(Math.abs(r.diff) * 100)}`, kind: r.diff > 0 && !r.below ? "accent" : "plain" });
+    if (r.iddaa != null) tags.push({ text: `iddaa ${fx(r.iddaa, 2)}`, kind: "plain" });
+    else if (r.price != null) tags.push({ text: `yurtdışı ${fx(r.price, 2)}`, kind: "plain" });
+    if (r.ev != null) tags.push({ text: signedInt(r.ev), kind: r.ev >= PLAY - EPS ? "good" : "bad" });
+    if (r.sport !== "basketball" && r.market === "totals" && r.outcome === "under") tags.push({ text: "Alt eğilimi ⚠", kind: "warn", under: true });
+    if (r.minor) tags.push({ text: "doğrulanmamış", kind: "plain" });
+    return tags;
+  }
+  /* Takip özeti tek satır: sonuçlanan, tuttu %, birim kazanç; kayıt yoksa null. */
+  function trackSummary(t) {
+    if (!t || !t.settled) return null;
+    return { settled: t.settled, hit: t.hit_rate == null ? "–" : pctInt(t.hit_rate), roi: t.roi == null ? "–" : signedPct(t.roi),
+      roiGood: t.roi != null ? t.roi > 0 : null, reliable: !!t.reliable };
+  }
+
+  return { PLAY, CLOSE, BAND_TEXT, breakEven, bandOf, liveCount, isLive, headline, verdict, matchBand, bestOptions, daySummary,
+    parseMatchPath, rankText, BAR_MIN, barLabels, tiles, verdictView, valueSections, valueTags, trackSummary };
 })();
 
 if (typeof module !== "undefined") module.exports = Decide;

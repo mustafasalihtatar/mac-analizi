@@ -29,7 +29,8 @@ const Desktop = (() => {
   let lastTab = "bugun";
   function valueCount() {
     if (!DATA || !DATA.value) return 0;
-    return Value.build(DATA.value.picks, state.iddaa, (id) => (byId.get(id) || {}).match, new Date()).rows.length;
+    const s = Decide.valueSections(Value.build(DATA.value.picks, state.iddaa, (id) => (byId.get(id) || {}).match, new Date()).rows);
+    return s.play.length + s.rest.length; // §40: Değerli ekranındaki iki bölümle aynı sayı
   }
   function navLinks(active) {
     const counts = { degerli: valueCount(), kupon: state.kupon.length };
