@@ -196,8 +196,71 @@ const Decide = (() => {
       roiGood: t.roi != null ? t.roi > 0 : null, reliable: !!t.reliable };
   }
 
+  /* ---------- §40 Aşama 5: Ayarlar, Geçmiş, Performans ---------- */
+  const DAY_MS = 86400000;
+  /* Son yedek: metin + uyarı (hiç yok ya da 7 günden eski). */
+  function backupState(lastIso, now) {
+    const t = lastIso ? Date.parse(lastIso) : NaN;
+    if (!Number.isFinite(t)) return { text: "henüz yok", warn: true };
+    const days = Math.floor((now - t) / DAY_MS);
+    return { text: days <= 0 ? "bugün" : days === 1 ? "dün" : `${days} gün önce`, warn: days > 7 };
+  }
+  /* Sürüm: yayın damgası (YYYYMMDDhhmmss) → "20261127"; yerelde "dev". */
+  const versionText = (v) => (!v || v === "dev" ? "geliştirme" : String(v).slice(0, 8));
+  /* Geçmiş kuponları: live = sonuçlanmamış ve en az bir seçimi başlamış; waiting = sonuçlanmamış, hiçbiri başlamamış;
+     done = sonuçlanmış (tuttu/yattı/iade). settle(c) → {status}. */
+  function splitCoupons(coupons, settle, now) {
+    const first = (c) => Math.min(...c.legs.map((l) => Date.parse(l.kickoff)).filter(Number.isFinite));
+    const live = [], waiting = [], done = [];
+    for (const c of coupons || []) {
+      const st = settle(c).status;
+      if (st !== "pending") done.push(c);
+      else if (c.legs.some((l) => Date.parse(l.kickoff) <= now)) live.push(c);
+      else waiting.push(c);
+    }
+    live.sort((a, b) => first(a) - first(b));
+    waiting.sort((a, b) => first(a) - first(b));
+    done.sort((a, b) => Date.parse(b.playedAt) - Date.parse(a.playedAt));
+    return { live, waiting, done };
+  }
+  /* "Değerli seçenekler kazandırıyor mu?" — takip özeti (yurtdışı oranla). Kayıt yoksa null. */
+  function valueQuestion(t) {
+    if (!t || !t.settled) return null;
+    const title = !t.reliable ? "Henüz belli değil" : t.roi > 0 ? "Şimdilik evet" : "Şimdilik hayır";
+    const weak = (t.groups || []).filter((g) => g.settled >= 10 && g.roi != null && g.roi < 0).map((g) => g.group);
+    return { title, big: t.roi == null ? "–" : signedPct(t.roi), good: t.roi != null && t.roi > 0,
+      text: `${t.settled} seçenek sonuçlandı, tutma oranı ${t.hit_rate == null ? "–" : pctInt(t.hit_rate)}. Yurtdışı oranlarla ölçüldü.`
+        + (weak.length ? ` Zayıf: ${weak.join(", ")}.` : "") };
+  }
+  /* "Model piyasadan iyi mi?" — futbol harmanı (canlı 200 maç), NBA harmanı (300 maç). */
+  function modelQuestion(blend, nba) {
+    const rows = [];
+    let decided = false;
+    if (blend) {
+      const l = blend.live, n = l ? l.n : 0, goal = l ? l.min_n : 200;
+      let text = !n ? "henüz sonuçlanan maç yok" : l.diff < 0 ? "model biraz önde" : l.diff > 0 ? "piyasa biraz önde" : "başa baş";
+      if (blend.reverted_at) { text = "karar: piyasaya dönüldü"; decided = true; } else if (n >= goal) { text = "karar: harman sitede kaldı"; decided = true; }
+      rows.push({ name: "Futbol", n: Math.min(n, goal), goal, text });
+    }
+    if (nba) {
+      const done = !!nba.decided_at;
+      if (done) decided = true;
+      rows.push({ name: "NBA", n: done ? nba.need : Math.min(nba.n || 0, nba.need), goal: nba.need,
+        text: done ? `karar: sitede ${nba.use_on_site ? "harman" : "piyasa"}` : "" });
+    }
+    if (!rows.length) return null;
+    return { title: decided ? "Karar verildi" : "Henüz belli değil", rows, note: "Sayı dolunca site karar verir: model kötüyse piyasaya döner." };
+  }
+  /* "Favori ne sıklıkla kazandı?" */
+  const favoriteQuestion = (p) => (p && p.n && p.favorite_hit != null ? { big: pctInt(p.favorite_hit), text: `${p.n} futbol maçı` } : null);
+  /* "2'li kupon", "3'lü", "6'lı", "9'lu", "10'lu": son rakama göre ek (20 ve üstü kuponda yok). */
+  const LI = ["lu", "li", "li", "lü", "lü", "li", "lı", "li", "li", "lu"];
+  const legsName = (n) => `${n}'${LI[n % 10]}`;
+  const VERDICT_TEXT = { model: ["Model haklı", "good"], market: ["Piyasa haklı", "bad"], equal: ["Berabere", "plain"] };
+
   return { PLAY, CLOSE, BAND_TEXT, breakEven, bandOf, liveCount, isLive, headline, verdict, matchBand, bestOptions, daySummary,
-    parseMatchPath, rankText, BAR_MIN, barLabels, tiles, verdictView, valueSections, valueTags, trackSummary };
+    parseMatchPath, rankText, BAR_MIN, barLabels, tiles, verdictView, valueSections, valueTags, trackSummary,
+    backupState, versionText, splitCoupons, valueQuestion, modelQuestion, favoriteQuestion, legsName, VERDICT_TEXT };
 })();
 
 if (typeof module !== "undefined") module.exports = Decide;

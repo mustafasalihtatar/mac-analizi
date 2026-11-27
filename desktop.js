@@ -59,12 +59,14 @@ const Desktop = (() => {
       h("div", { class: "sb-open" }, h("a", { class: "btn primary block", href: "#/kupon" }, "Kuponu aç"))));
   }
   function footer() {
-    const u = (DATA && DATA.odds_updated) || {}, q = DATA && DATA.odds_quota;
+    const u = (DATA && DATA.odds_updated) || {};
     const line = (label, t) => h("span", {}, `${label}: `, t ? h("time", { datetime: t }, fmtStamp(t)) : "yok");
     return h("div", { class: "sb-foot foot" },
       h("span", { class: "sb-foot-h" }, "Oranların son güncellemesi"),
       line("Futbol", u.football), line("NBA", u.basketball),
-      q && q.remaining != null ? h("span", {}, `Odds API: ${q.remaining} kredi kaldı`) : null);
+      // §40: kredi ve teknik ayrıntı Ayarlar > Teknik bilgi'de
+      h("a", { class: "sb-set", href: "#/ayarlar", "aria-current": location.hash.startsWith("#/ayarlar") ? "page" : null },
+        icon("gear", 18, 1.8), "Ayarlar"));
   }
   function renderSide(root, activeTab) {
     if (activeTab) lastTab = activeTab;
@@ -73,7 +75,7 @@ const Desktop = (() => {
       h("a", { class: "brand sb-brand", href: "#/", "aria-label": "Maç Analiz" },
         h("span", { class: "brand-mark", "aria-hidden": "true" }, icon("trend", 18, 2.4)),
         h("span", { class: "brand-name", "aria-hidden": "true" }, "MAÇ ANALİZ")),
-      h("nav", { class: "sb-nav", "aria-label": "Bölümler" }, navLinks(lastTab)),
+      h("nav", { class: "sb-nav", "aria-label": "Bölümler" }, navLinks(location.hash.startsWith("#/ayarlar") ? null : lastTab)),
       kuponBox(),
       footer());
   }

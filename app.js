@@ -423,7 +423,7 @@ async function refreshIddaaFeed(force = false) {
   if ((changed || location.hash.startsWith("#/gecmis")) && !typing) route(); // yazarken yeniden çizip kutuyu bozma
 }
 /* Geçmiş > Ayarlar: otomatik çekme anahtarı, son başarılı çekim, hata, eşleşmeyenler. */
-function iddaaFeedSection(render) {
+function iddaaFeedSection(render, tech) {
   const on = iddaaAutoOn(), st = loadIddaaStatus();
   const sportLine = (sport, name) => {
     const x = st[sport] || {};
@@ -436,6 +436,9 @@ function iddaaFeedSection(render) {
         x.teams && x.teams.length ? h("p", { class: "opt-sub" }, "Takım: ", x.teams.join(", ")) : null,
         x.matches && x.matches.length ? h("p", { class: "opt-sub" }, "Maç: ", x.matches.join(", ")) : null) : null);
   };
+  if (tech) return sec("iddaa oranları", card(on ? [sportLine("football", "Futbol"), sportLine("basketball", "NBA")]
+    : h("p", { class: "feed-st row muted" }, "Otomatik çekme kapalı.")),
+  h("p", { class: "sec-note" }, "Oranlar iddaa'dan bu cihaza çekilir; Maç Analiz sunucusuna ya da siteye gönderilmez. Elle girdiğin oran her zaman önce gelir."));
   return sec("iddaa oranları",
     card(
       h("div", { class: "set-row row" }, h("span", {}, "iddaa oranlarını otomatik çek"),
@@ -579,7 +582,7 @@ function liveRerender() {
   detail.scrollTop = dy;
 }
 /* Geçmiş > Ayarlar: canlı skor anahtarı, son çekim, hata, görülen durum kodları. */
-function liveSection(render) {
+function liveSection(render, tech) {
   const on = liveOn(), st = loadLiveStatus();
   const sportLine = (sport, name) => {
     const x = st[sport] || {};
@@ -590,6 +593,8 @@ function liveSection(render) {
       codes.length ? h("span", { class: "muted" }, "Görülen durum kodları: ", codes.map(([k, c]) =>
         `${k}×${c}${Live.KNOWN[sport].includes(Number(k)) ? "" : " (tanınmıyor)"}`).join(", ")) : null);
   };
+  if (tech) return sec("Canlı skor", card(on ? [sportLine("football", "Futbol"), sportLine("basketball", "NBA")]
+    : h("p", { class: "feed-st row muted" }, "Canlı skor kapalı.")));
   return sec("Canlı skor",
     card(
       h("div", { class: "set-row row" }, h("span", {}, "Canlı skoru göster"),
@@ -1018,11 +1023,11 @@ function bestCard(m, render) {
     h("a", { class: "lnk ball", href: matchHref(m.id, true) }, `Tüm seçenekler (${m.sport === "basketball" ? "Sonuç · Sayı" : "Sonuç · Gol"} · Takımlar) ›`));
 }
 /* Açılır bölüm: başlık + tek satır özet; içerik ilk açılışta kurulur. */
-function acc(title, sub, build, open) {
+function acc(title, sub, build, open, onToggle) {
   let built = false;
   const body = h("div", { class: "acc-body" });
   const fill = () => { if (!built) { built = true; body.replaceChildren(...build().filter(Boolean)); } };
-  const d = h("details", { class: "acc", ontoggle: (ev) => { if (ev.currentTarget.open) fill(); } },
+  const d = h("details", { class: "acc", ontoggle: (ev) => { if (ev.currentTarget.open) fill(); if (onToggle) onToggle(ev.currentTarget.open); } },
     h("summary", {}, h("span", { class: "acc-t" }, h("b", {}, title), sub ? h("small", {}, sub) : null), icon("chev", 18, 2)), body);
   if (open) { fill(); d.open = true; }
   return d;
@@ -2302,13 +2307,6 @@ const manualNeeded = (c) => c.legs.some((l) => History.needsManual(l)
 const fmtDay = (iso) => new Intl.DateTimeFormat("tr-TR", { timeZone: TZ, day: "numeric", month: "short" }).format(new Date(iso));
 /* Son yedek zamanı (sadece bu cihazda, "Son yedek: …" yazısı için). */
 const BSTORE = "macanaliz.yedek.v1";
-function lastBackupText() {
-  let t = null;
-  try { t = localStorage.getItem(BSTORE); } catch { /* kayıt alanı kapalı */ }
-  if (!t || isNaN(new Date(t))) return "henüz yok";
-  const days = Math.floor((Date.now() - new Date(t).getTime()) / 86400000);
-  return days <= 0 ? "bugün" : days === 1 ? "dün" : `${days} gün önce`;
-}
 function summaryCard(s, cal) {
   const decided = s.won + s.lost;
   return h("div", { class: "card pad lg" },
@@ -2354,9 +2352,8 @@ function couponRow(c) {
     h("div", { class: "r" }, manual ? badge("Elle sonuçlandır", "warn") : couponBadge(c, r), net),
     h("span", { class: "chev" }, icon("chev", 16, 2.2)));
 }
-function settingsSection(render) {
-  const b = History.budgetState(state.history, new Date());
-  let val = state.history.budget ? String(state.history.budget).replace(".", ",") : "";
+/* §40 yedekle / yedekten yükle (Ayarlar > Kayıtlar). */
+function backupKit(render) {
   const file = h("input", { type: "file", accept: ".json,application/json", hidden: true, onchange: async (ev) => {
     const f = ev.target.files && ev.target.files[0];
     ev.target.value = "";
@@ -2385,81 +2382,148 @@ function settingsSection(render) {
       render();
     } catch { toast("Yedek dosyası oluşturulamadı"); }
   };
-  const theme = loadTheme();
-  return sec("Ayarlar",
-    state.histMsg ? h("p", { class: state.histMsg.bad ? "alert bad" : "alert good", role: "status" }, state.histMsg.text) : null,
-    card(
-      h("form", { class: "set-row row", onsubmit: (ev) => {
-        ev.preventDefault();
-        const v = parseNum(val);
-        if (!val.trim()) { state.history.budget = null; saveHistory(); toast("Bütçe kaldırıldı"); render(); return; }
-        if (!(v > 0) || !Number.isFinite(v)) { toast("Bütçe sıfırdan büyük olmalı"); return; }
+  return { file, download };
+}
+/* Yayın damgası: index.html'deki app.js?v=<damga> (yerelde "dev"). */
+const APP_VERSION = (() => {
+  const s = document.querySelector('script[src*="app.js"]');
+  const m = s && /[?&]v=([^&]+)/.exec(s.getAttribute("src") || "");
+  return m ? m[1] : "dev";
+})();
+function srow(title, sub, control, subCls) {
+  return h("div", { class: "srow row" }, h("div", { class: "stxt" }, h("span", { class: "st" }, title),
+    sub ? h("small", { class: subCls || null }, sub) : null), control);
+}
+const sswitch = (label, on, onChange) => h("input", { type: "checkbox", class: "switch", role: "switch", "aria-label": label,
+  checked: on, onchange: (ev) => onChange(ev.target.checked) });
+function viewSettings(root) {
+  const render = () => { const y = window.scrollY; viewSettings(root); window.scrollTo(0, y); };
+  const kit = backupKit(render);
+  const auto = iddaaAutoOn(), st = loadIddaaStatus(), fx = st.football || {}, bx = st.basketball || {};
+  const last = [fx.lastOk, bx.lastOk].filter(Boolean).sort().pop();
+  const err = [fx.error, bx.error].find(Boolean);
+  const feedSub = !auto ? "Kapalı; oranları maç detayında elle girebilirsin" : last
+    ? `Son: ${fmtStamp(last)} · ${fx.matched || 0} futbol, ${bx.matched || 0} NBA maçı` : "Henüz çekim yok";
+  const b = History.budgetState(state.history, new Date());
+  const budgetIn = h("span", { class: "sbudget" },
+    h("input", { type: "text", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", class: "inp", "aria-label": "Aylık bütçe (TL)",
+      placeholder: "yok", value: state.history.budget ? String(state.history.budget).replace(".", ",") : "",
+      onchange: (ev) => {
+        const t = ev.target.value.trim(), v = parseNum(t);
+        if (!t) { state.history.budget = null; saveHistory(); toast("Bütçe kaldırıldı"); render(); return; }
+        if (!(v > 0) || !Number.isFinite(v)) { toast("Bütçe sıfırdan büyük olmalı"); render(); return; }
         state.history.budget = Math.round(v * 100) / 100;
         if (saveHistory()) toast("Bütçe kaydedildi");
         render();
-      } },
-        h("label", { for: "budget-in" }, "Aylık bütçe"),
-        h("span", { class: "inwrap", style: "display:flex;gap:8px;align-items:center" },
-          h("input", { id: "budget-in", type: "text", inputmode: "decimal", autocomplete: "off", enterkeyhint: "done", class: "inp wide", value: val,
-            placeholder: "yok", oninput: (ev) => { val = ev.target.value; } }),
-          h("span", { class: "muted" }, "TL"),
-          h("button", { type: "submit", class: "btn sm" }, "Kaydet"))),
-      b ? h("p", { class: "opt-sub", style: "padding:0 14px 12px;margin-top:-4px" }, `Bu ay ${tl(b.spent)} / ${tl(b.budget)} (%${Math.round(b.ratio * 100)}). `,
-        "%80'e gelince ve aşınca Kuponum'da uyarı çıkar. Kutuyu boşaltıp kaydedersen bütçe kalkar.") : null,
-      h("div", { class: "set-row row" }, h("span", { id: "theme-l" }, "Tema"),
-        segmented("Tema", [["system", "Sistem"], ["dark", "Koyu"], ["light", "Açık"]], theme, (v) => { setTheme(v); render(); }, "sm")),
-      h("button", { type: "button", class: "link-btn row", disabled: !state.history.coupons.length, onclick: download }, "Yedekle"),
-      h("button", { type: "button", class: "link-btn row", onclick: () => file.click() }, "Yedekten yükle"),
-      h("button", { type: "button", class: "link-btn row upd", "aria-live": "polite", onclick: async (ev) => {
-        const btn = ev.currentTarget, out = btn.querySelector(".upd-st");
-        btn.disabled = true;
-        out.textContent = "Denetleniyor…";
-        const r = await updateApp();
-        out.textContent = UPDATE_TEXT[r];
-        if (r !== "activating") btn.disabled = false;
-      } }, h("span", {}, "Uygulamayı güncelle"), h("span", { class: "upd-st muted" }))), file,
-    h("p", { class: "sec-note" }, `Kayıtlar sadece bu cihazda. Son yedek: ${lastBackupText()}. `,
-      "Tarayıcı verisi silinirse kaybolur; ara sıra yedek al. Yedekten yükleme mevcut kuponları silmez, birleştirir."));
+      } }), h("span", { class: "muted" }, "TL"));
+  const bk = Decide.backupState((() => { try { return localStorage.getItem(BSTORE); } catch { return null; } })(), Date.now());
+  const upd = h("button", { type: "button", class: "slink row upd", "aria-live": "polite", onclick: async (ev) => {
+    const btn = ev.currentTarget, out = btn.querySelector(".upd-st");
+    btn.disabled = true;
+    out.textContent = "Denetleniyor…";
+    const r = await updateApp();
+    out.textContent = UPDATE_TEXT[r];
+    if (r !== "activating") btn.disabled = false;
+  } }, h("span", {}, "Uygulamayı güncelle"), h("span", { class: "upd-st muted" }));
+  const stamp = (sp) => (DATA.odds_updated && DATA.odds_updated[sp] ? fmtDateTime(DATA.odds_updated[sp]) : "yok");
+  const tech = () => [
+    sec("Kaynaklar", padCard(
+      h("div", { class: "kv" }, h("span", {}, "Futbol oranları (son yazım)"), h("b", {}, stamp("football"))),
+      h("div", { class: "kv" }, h("span", {}, "NBA oranları (son yazım)"), h("b", {}, stamp("basketball"))),
+      DATA.minor_info ? h("div", { class: "kv" }, h("span", {}, "Diğer ligler programı"),
+        h("b", {}, DATA.minor_info.fixtures_updated ? fmtDateTime(DATA.minor_info.fixtures_updated) : "yok")) : null,
+      quotaLine())),
+    iddaaFeedSection(render, true), liveSection(render, true), minorNote(), note()];
+  root.replaceChildren(...[
+    h("div", { class: "topnav" }, backLink(state.settingsFrom || "#/", "Geri")),
+    h("header", { class: "hd tight" }, h("h1", { class: "title" }, "Ayarlar")),
+    state.histMsg ? h("p", { class: state.histMsg.bad ? "alert bad" : "alert good", role: "status" }, state.histMsg.text) : null,
+    sec("Veri", card(
+      srow("iddaa oranlarını otomatik çek", feedSub, sswitch("iddaa oranlarını otomatik çek", auto,
+        (on) => { setIddaaAutoOn(on); if (on) refreshIddaaFeed(true).then(render); render(); })),
+      err && auto ? h("p", { class: "serr bad-t" }, `Son hata: ${err}`) : null,
+      srow("Canlı skor", "Sayfa açıkken, en fazla 45 sn'de bir", sswitch("Canlı skor", liveOn(), (on) => { setLiveOn(on); render(); })),
+      h("button", { type: "button", class: "slink row", disabled: !auto || feedBusy, onclick: async (ev) => {
+        ev.currentTarget.disabled = true;
+        await refreshIddaaFeed(true);
+        render();
+      } }, "Oranları şimdi çek"))),
+    sec("Kupon", card(srow("Aylık bütçe", b ? `Bu ay ${fmtMoney(b.spent)} / ${fmtMoney(b.budget)} TL (%${Math.round(b.ratio * 100)})` : "Aşınca Geçmiş'te uyarı çıkar", budgetIn))),
+    sec("Görünüm", card(srow("Tema", null, segmented("Tema", [["system", "Sistem"], ["dark", "Koyu"], ["light", "Açık"]], loadTheme(),
+      (v) => { setTheme(v); render(); }, "sm")))),
+    sec("Kayıtlar", card(
+      h("button", { type: "button", class: "slink row two", disabled: !state.history.coupons.length, onclick: kit.download },
+        h("span", { class: "st" }, "Yedekle"), h("small", { class: bk.warn ? "warn-t" : null }, `Son yedek: ${bk.text}`)),
+      h("button", { type: "button", class: "slink row plain", onclick: () => kit.file.click() }, "Yedekten yükle"),
+      upd), kit.file,
+    h("p", { class: "sec-note" }, "Kuponların sadece bu telefonda durur; tarayıcı verisi silinirse kaybolur. Yedekten yükleme mevcut kuponları silmez, birleştirir.")),
+    h("div", { class: "accs" }, acc("Teknik bilgi", "Kaynaklar, kotalar, eşleşme, canlı skor kodları", tech)),
+    h("p", { class: "foot" }, `Sürüm ${Decide.versionText(APP_VERSION)} · Site yayını ${fmtStamp(DATA.generated_at)}`),
+  ].filter(Boolean));
 }
-/* §40 Ayarlar (dişliden). Aşama 1: Geçmiş'teki ayar bölümleri burada da; Aşama 5'te sayfa yeniden düzenlenir ve Geçmiş'ten kalkar. */
-function viewSettings(root) {
-  const render = () => { const y = window.scrollY; viewSettings(root); window.scrollTo(0, y); };
-  root.replaceChildren(h("div", { class: "topnav" }, backLink(state.settingsFrom || "#/", "Geri")), h("header", { class: "hd tight" }, h("h1", { class: "title" }, "Ayarlar")),
-    iddaaFeedSection(render), liveSection(render), settingsSection(render), quotaLine(), note());
+/* Geçmiş üst özeti: net, kupon, tuttu %, bütçe çubuğu. */
+function monthCard(shown) {
+  const s = History.summarize(shown), decided = s.won + s.lost;
+  const b = History.budgetState(state.history, new Date());
+  const cell = (lab, val, cls) => h("div", {}, h("small", {}, lab), h("b", { class: cls || null }, val));
+  return h("section", { class: "card pad hsum", "aria-label": "Özet" },
+    h("div", { class: "hsum3" }, cell("Net", signedTL(s.net), netCls(s.net)), cell("Kupon", String(shown.length)),
+      cell("Tuttu", decided ? `%${Math.round((s.won / decided) * 100)}` : "–")),
+    b ? h("div", { class: "hbudget" }, h("div", { class: "kv" }, h("span", {}, "Aylık bütçe"), h("b", {}, `${fmtMoney(b.spent)} / ${fmtMoney(b.budget)} TL`)),
+      h("div", { class: "track", role: "img", "aria-label": `Bütçenin %${Math.round(b.ratio * 100)}'i harcandı` },
+        h("span", { class: b.ratio >= 0.8 ? "fill-warn" : "fill-model", style: `width:${Math.min(100, b.ratio * 100)}%` })))
+      : h("p", { class: "vnote" }, "Aylık bütçe yok · ", h("a", { class: "lnk", href: "#/ayarlar" }, "Ayarlar'dan koy")),
+    s.pending ? h("p", { class: "vnote" }, `${s.pending} kupon sonuç bekliyor (${tl(s.pendingStaked)}; nete katılmaz).`) : null);
+}
+/* Oynanan kupon (canlı): seçim başına skor · dakika ya da durum. */
+function liveCouponCard(c) {
+  const r = History.settle(c);
+  const leg = (l) => {
+    const line = liveLegLine(l), st = Date.parse(l.kickoff) <= Date.now();
+    return h("div", { class: "lleg" }, h("div", { class: "info" }, h("b", {}, l.pick), h("span", { class: "meta" }, l.match)),
+      h("div", { class: "r" }, line || (st ? h("span", { class: "meta" }, l.status === "finished" && l.score ? `Bitti · ${dash(l.score)}` : "Başladı")
+        : [h("b", {}, fmtTime(l.kickoff)), h("small", { class: "meta" }, "Başlamadı")])));
+  };
+  return h("section", { class: "card pad lcoupon", "aria-label": `${Decide.legsName(c.legs.length)} kupon` },
+    h("a", { class: "lhead", href: `#/gecmis/${encodeURIComponent(c.id)}` },
+      h("b", {}, `${Decide.legsName(c.legs.length)} kupon · ${fmtMoney(c.stake)} TL · oran ${odds(c.totalOdds)}`), couponBadge(c, r)),
+    c.legs.map(leg));
 }
 function viewHistory(root) {
   const render = () => { const y = window.scrollY; viewHistory(root); window.scrollTo(0, y); };
   applyResults();
-  const all = [...state.history.coupons].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt));
+  const all = [...state.history.coupons];
   const mk = History.monthKey(new Date().toISOString());
-  const month = all.filter((c) => History.monthKey(c.playedAt) === mk);
   const monthName = cap1(MONTHS_UP(new Date()));
   const period = state.hperiod || "month";
-  const shown = period === "all" ? all : month;
+  const shown = period === "all" ? all : all.filter((c) => History.monthKey(c.playedAt) === mk);
   const kids = [screenHead("Geçmiş", segmented("Dönem", [["month", monthName], ["all", "Tüm zamanlar"]], period,
     (v) => { state.hperiod = v; render(); }))];
   if (state.historyError) kids.push(h("p", { class: "alert bad", role: "alert" }, state.historyError));
   const bb = budgetBanner();
   if (bb) kids.push(bb);
   if (!all.length) {
-    kids.push(padCard(h("p", { style: "font-weight:600" }, "Henüz oynadığın kupon yok."),
-      h("p", { class: "opt-sub" }, "Kupon sekmesinde kuponu kurup \"Oynadım\"a bas; burada net sonuç, tutma oranı ve kupon tiplerine göre döküm çıkar.")));
-  } else if (!shown.length) {
-    kids.push(padCard(h("p", { class: "muted" }, `${monthName} ayında oynanan kupon yok.`)));
-  } else {
-    const hleft = [summaryCard(History.summarize(shown), History.calibration(shown)), sec("Kupon tipine göre", typeRows(shown))];
-    const unv = shown.filter((c) => c.unverified).length;
-    if (shown.some((c) => History.settle(c).provisional)) {
-      hleft.push(h("p", { class: "sec-note" }, "Geçici sonuçlar (iddaa canlı skoru) dahil; resmi sonuç sabah gelince o geçerli olur."));
-    }
-    kids.push(twoCol(hleft, [sec("Kuponlar", card(shown.map(couponRow)),
-      unv ? h("p", { class: "sec-note" }, `${unv} kupon iddaa oranı girilmeden kaydedildi ("Oran doğrulanmadı"); kazançları gerçek iddaa oranıyla farklı olabilir.`) : null)]));
+    kids.push(padCard(h("p", { class: "ctitle" }, "Henüz oynadığın kupon yok."),
+      h("p", { class: "vnote" }, "Kupon sekmesinde kuponu kurup \"Oynadım\"a bas; burada net sonuç, canlı durum ve sonuçlar çıkar.")));
+    root.replaceChildren(...kids.filter(Boolean));
+    return;
   }
-  kids.push(iddaaFeedSection(render));
-  kids.push(liveSection(render));
-  kids.push(settingsSection(render));
-  kids.push(h("p", { class: "foot" }, "Sonuçlar maç bittikten sonraki sabah güncellemesiyle gelir (son 7 gün). Ertelenen, iptal edilen ",
-    "ya da uzatmaya giden maçlar ve LFA'da olmayan maçlar (NBA, Konferans Ligi, milli maçlar) elle sonuçlandırılır."));
+  const sp = Decide.splitCoupons(all, History.settle, Date.now()); // canlı ve bekleyenler dönemden bağımsız
+  const done = sp.done.filter((c) => shown.includes(c));
+  const left = [shown.length ? monthCard(shown) : padCard(h("p", { class: "muted" }, `${monthName} ayında oynanan kupon yok.`))];
+  if (sp.live.length) left.push(sec("Oynanıyor · canlı", sp.live.map(liveCouponCard)));
+  if (sp.waiting.length) left.push(sec("Bekleyenler", card(sp.waiting.map(couponRow))));
+  const right = [sec("Sonuçlananlar", done.length ? card(done.map(couponRow)) : padCard(h("p", { class: "muted" }, "Bu dönemde sonuçlanan kupon yok.")))];
+  if (shown.length) {
+    right.push(h("div", { class: "accs" }, acc("Kupon türüne göre döküm", "tür, tutma, net ve model beklentisi",
+      () => [typeRows(shown), summaryCard(History.summarize(shown), History.calibration(shown))])));
+  }
+  const unv = shown.filter((c) => c.unverified).length;
+  const notes = [];
+  if (shown.some((c) => History.settle(c).provisional)) notes.push("Geçici sonuçlar (iddaa canlı skoru) dahil; resmi sonuç sabah gelince o geçerli olur.");
+  if (unv) notes.push(`${unv} kupon iddaa oranı girilmeden kaydedildi ("Oran doğrulanmadı").`);
+  notes.push("Resmi sonuçlar maçtan sonraki sabah gelir; ertelenen, uzatmaya giden ya da verisi olmayan maçlar elle sonuçlandırılır.");
+  kids.push(twoCol(left, right), h("p", { class: "foot" }, notes.join(" ")));
   root.replaceChildren(...kids.filter(Boolean));
 }
 function legStatusText(l) {
@@ -2566,37 +2630,57 @@ function liveRow(name, n, goal, unit, cap) {
       h("span", { class: "fill-model", style: `width:${p * 100}%;min-width:6px` })),
     h("span", { class: "cap" }, cap));
 }
+/* §40 Performans: üç soru kartı ("Değerli kazandırıyor mu?", "Model piyasadan iyi mi?", "Favori ne sıklıkla kazandı?"), son maçlar;
+   Brier tabloları, kalibrasyon, geçmiş test, NBA ve diğer ligler "Teknik ayrıntı"da. */
+function qCard(question, title, big, bigCls, ...body) {
+  return h("section", { class: "card pad pq", "aria-label": question }, h("p", { class: "pq-q" }, question),
+    title || big != null ? h("div", { class: "pq-head" }, title ? h("h2", {}, title) : null, big != null ? h("b", { class: `pq-big ${bigCls || ""}` }, big) : null) : null,
+    ...body);
+}
 function viewPerformance(root) {
   const render = () => { const y = window.scrollY; viewPerformance(root); window.scrollTo(0, y); };
   const p = DATA.performance, bl = DATA.blend, nb = DATA.performance_nba, v = DATA.value;
-  const kids = [h("header", { class: "hd tight" }, h("h1", { class: "title" }, "Performans"),
-    h("p", { class: "lede" }, "Model ne kadar isabetli, piyasayı geçiyor mu?"))];
-
-  // CANLI ÖLÇÜM: karar sayaçları
-  const live = [];
-  if (p) live.push(liveRow("Futbol tahminleri", p.n || 0, p.min_reliable || 30, "maç",
-    p.n ? `Favori tuttu ${pct(p.favorite_hit)}. ${p.n < p.min_reliable ? `${p.min_reliable} maçtan sonra daha anlamlı.` : "Ayrıntı aşağıda."}`
-      : "Maçlar bittikçe başlamadan önceki son tahminler gerçek sonuçla karşılaştırılır."));
-  if (bl) {
-    const l = bl.live;
-    live.push(liveRow("Futbol: harman ve piyasa", l ? l.n : 0, l ? l.min_n : 200, "maç",
-      l && l.n ? `Brier harman ${brier(l.blend_brier)}, piyasa ${brier(l.market_brier)}. ${l.n < l.min_n ? `${l.min_n} maçta karar: harman kötüyse site piyasaya döner.`
-        : bl.use_on_site ? "Harman canlıda piyasadan kötü değil; sitede harman." : "Sitede piyasa olasılığı gösteriliyor."}`
-        : bl.use_on_site ? `${l ? l.min_n : 200} maçta karar: harman kötüyse site piyasaya döner.` : "Sitede piyasa olasılığı gösteriliyor."));
+  const kids = [h("header", { class: "hd tight" }, h("h1", { class: "title" }, "Performans"), h("p", { class: "lede" }, "Site ne kadar işe yarıyor?"))];
+  const vq = Decide.valueQuestion(v && v.tracking);
+  const left = [vq ? qCard("Değerli seçenekler kazandırıyor mu?", vq.title, vq.big, vq.good ? "good-t" : "bad-t", h("p", { class: "vnote" }, vq.text))
+    : qCard("Değerli seçenekler kazandırıyor mu?", "Henüz belli değil", null, null, h("p", { class: "vnote" }, "Henüz sonuçlanmış Değerli seçeneği yok."))];
+  const mq = Decide.modelQuestion(bl, nb && nb.blend);
+  if (mq) {
+    left.push(qCard("Model piyasadan iyi mi?", mq.title, null, null,
+      mq.rows.map((r) => h("div", { class: "pq-row" },
+        h("div", { class: "kv" }, h("b", {}, r.name), h("span", { class: "muted" }, `${fmtInt(r.n)} / ${fmtInt(r.goal)} maç${r.text ? ` · ${r.text}` : ""}`)),
+        h("div", { class: "track", role: "img", "aria-label": `${r.name}: ${r.n} / ${r.goal} maç` },
+          h("span", { class: "fill-model", style: `width:${Math.max(2, Math.min(100, (r.n / r.goal) * 100))}%` })))),
+      h("p", { class: "vnote" }, mq.note)));
   }
-  if (nb) {
-    const b = nb.blend;
-    live.push(liveRow("NBA: model ve piyasa", b.decided_at ? b.need : b.n, b.need, "maç", b.decided_at
-      ? `${fmtDate(b.decided_at)} karar: son 100 maçta Brier harman ${brier(b.blend_brier)}, piyasa ${brier(b.market_brier)}; sitede ${b.use_on_site ? "harman" : "piyasa"}.`
-      : `${b.need} maçta NBA harmanı öğrenilir; son 100 maçta piyasayı geçerse sitede gösterilir.`));
+  const fq = Decide.favoriteQuestion(p);
+  if (fq) left.push(qCard("Favori ne sıklıkla kazandı?", null, null, null,
+    h("div", { class: "pq-head" }, h("span", { class: "vnote" }, fq.text), h("b", { class: "pq-big" }, fq.big))));
+  const recent = (p && p.recent) || [];
+  const rrow = (r) => {
+    const vt = r.verdict && Decide.VERDICT_TEXT[r.verdict];
+    const pm = r.p_actual_model, pk = r.p_actual_market;
+    return h("a", { class: "prow row", href: matchHref(r.id) },
+      h("div", { class: "info" }, h("b", {}, `${r.home} – ${r.away}`),
+        h("span", { class: "meta" }, `${dash(r.score)}${pm != null ? ` · model ${pct(pm)}` : ""}${pk != null ? `, piyasa ${pct(pk)}` : ""}`)),
+      vt ? h("span", { class: `pv ${vt[1]}-t` }, vt[0]) : null);
+  };
+  const right = [];
+  if (recent.length) {
+    right.push(sec("Son maçlar", card(recent.slice(0, 4).map(rrow),
+      recent.length > 4 ? h("details", { class: "more pmore" }, h("summary", {}, `${recent.length - 4} maç daha`), recent.slice(4).map(rrow)) : null),
+    h("p", { class: "sec-note" }, "Yüzde: gerçekleşen sonuca maç öncesi verilen olasılık; kim daha yüksek verdiyse o haklı.")));
   }
-  if (v && v.tracking) live.push(liveRow("Değerli takibi", v.tracking.settled, v.min_reliable, "seçenek",
-    `${v.min_reliable} sonuçlanmış seçenekten sonra güvenilir.`));
-  // Sıra mobildekiyle aynı (canlı, geçmiş test, kalibrasyon, NBA, diğer ligler); masaüstünde ikiye bölünür
-  const pleft = [live.length ? sec("Canlı ölçüm", card(live)) : null, ...(p && p.n ? liveFootball(p) : []), ...backtestFootball()];
-  const pright = [calibrationSection(render), ...(nb ? nbaPerf(nb) : []), ...minorPerf()];
-  kids.push(twoCol(pleft, pright));
-  kids.push(note());
+  const tech = () => {
+    const live = [];
+    if (p) live.push(liveRow("Futbol tahminleri", p.n || 0, p.min_reliable || 30, "maç",
+      p.n ? `Favori tuttu ${pct(p.favorite_hit)}.` : "Maçlar bittikçe son tahminler gerçek sonuçla karşılaştırılır."));
+    if (v && v.tracking) live.push(liveRow("Değerli takibi", v.tracking.settled, v.min_reliable, "seçenek", `${v.min_reliable} sonuçlanmış seçenekten sonra güvenilir.`));
+    return [live.length ? sec("Canlı ölçüm", card(live)) : null, ...(p && p.n ? liveFootball(p) : []), ...backtestFootball(),
+      calibrationSection(render), ...(nb ? nbaPerf(nb) : []), ...minorPerf(), note()];
+  };
+  right.push(h("div", { class: "accs" }, acc("Teknik ayrıntı", "Brier tabloları, kalibrasyon, geçmiş test, sakatlık denemesi", tech, !!state.perfTech, (o) => { state.perfTech = o; })));
+  kids.push(twoCol(left, right));
   root.replaceChildren(...kids.filter(Boolean));
 }
 /* Canlı futbol: pazar bazında Brier (sitede gösterilen / kendi model / kıyas), son maçlar. */
