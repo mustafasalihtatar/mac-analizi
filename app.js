@@ -509,7 +509,7 @@ async function fetchLive(sport, cands, st) {
   if (!p.ok) { state.live[sport] = { ...t0, version: 0 }; throw new Error("Biçim değişti"); } // sonraki tur tam istek
   const t = (state.live[sport] = Live.merge(t0, p, Date.now()));
   // eşleme (§34 ile aynı): olayı tablodaki maçlar; bir kez eşlenen maç tabloda olayı silinse de eşli kalır
-  const mt = Bulletin.match(Object.values(t.events), cands, iddaaMap(), sport);
+  const mt = Bulletin.match(Object.values(t.events), cands, iddaaMap(), sport, { live: true }); // canlı akışın id'leri bültenden farklı olabilir
   rememberTeams(mt.learned);
   for (const { ev, match } of mt.pairs) state.liveIds.set(match.id, { sport, iddaaId: ev.id });
   // görülen durum kodları (ilk NBA gecesi kontrolü, §37)
@@ -1091,8 +1091,10 @@ function viewMatchSummary(root, id, from, opts) {
   const warn = isMinor(m) ? null : oddsWarning();
   const main = [qHead(m)];
   if (m.report) main.push(karneCard(m));
-  if (!isDone(m) && (m.sport === "basketball" || isMinor(m) || m.expected)) main.push(verdictCard(m), bestCard(m, render));
-  else main.push(h("a", { class: "lnk ball", href: matchHref(m.id, true) }, "Tüm ayrıntılar ›"));
+  // başlamış maçta iddaa'nın canlı oranı sitede yok: KARAR "Maç başladı" der, en iyi 3 / ＋ gösterilmez (2026-11-27)
+  const decides = !isDone(m) && (m.sport === "basketball" || isMinor(m) || !!m.expected);
+  if (decides) main.push(verdictCard(m), started(m) ? null : bestCard(m, render));
+  if (!decides || started(m)) main.push(h("a", { class: "lnk ball", href: matchHref(m.id, true) }, "Tüm ayrıntılar ›"));
   const accs = summaryAccs(m, wide);
   const body = wide ? [h("div", { class: "dgrid qgrid" }, h("div", { class: "dcol" }, main), h("div", { class: "dcol" }, accs))]
     : [...main, h("div", { class: "accs" }, accs)];

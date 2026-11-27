@@ -91,8 +91,12 @@ const Bulletin = (() => {
      Yedek (2026-11-27): takımlardan biri haritada yoksa maç ancak saat farkı ≤ 15 dk, haritadaki taraf birebir, haritada
      olmayan taraf adla uyuyor (nameFits; ad haritada başka id'ye bağlı değil) ve tek aday varsa eşlenir (`guessed`); yeni
      id → ad `learned`'de döner (app.js bu cihazda hatırlar). Bir bizim maça iki iddaa maçı düşerse ya da aynı bizim ada iki iddaa id'si öğrenilecekse hepsi bırakılır.
-     Eşleşmeyen takım ya da maç loglanır (ters ev/deplasman da eşleşmez). */
-  function match(events, ourMatches, map, sport) {
+     Eşleşmeyen takım ya da maç loglanır (ters ev/deplasman da eşleşmez).
+     opts.live (canlı skor, 2026-11-27): iddaa'nın canlı akışı bazı liglerde (Süper Lig) bültendekinden farklı takım ve maç id'leri
+     kullanıyor; haritadaki bülten id'si canlıda tutmaz. Canlıda yedek kural "ad haritada başka id'ye bağlı" koşulunu aramaz (saat,
+     iki ad ve tek aday yine şart) ve haritada adı olan takımı öğrenmez (canlı id'si haritayı kirletmesin). */
+  function match(events, ourMatches, map, sport, opts) {
+    const live = !!(opts && opts.live);
     const pairs = [], teams = [], matches = [], seen = new Set();
     const comps = (map && map.comps) || {}, names = (map && map.teams) || {};
     const taken = new Set(Object.values(names));
@@ -106,13 +110,13 @@ const Bulletin = (() => {
       if (comps[ev.compId] !== sport) continue;
       const home = names[ev.homeId], away = names[ev.awayId];
       if (home == null || away == null) {
-        const side = (known, iddaaName, ours) => (known != null ? known === ours : !taken.has(ours) && nameFits(iddaaName, ours));
+        const side = (known, iddaaName, ours) => (known != null ? known === ours : (live || !taken.has(ours)) && nameFits(iddaaName, ours));
         const cands = (ourMatches || []).filter((x) => Math.abs(new Date(x.kickoff).getTime() - ev.kickoff) <= FALLBACK_TOL_MS
           && side(home, ev.home, x.home) && side(away, ev.away, x.away));
         if (cands.length === 1) {
           const m = cands[0], learn = {};
-          if (home == null) learn[ev.homeId] = m.home;
-          if (away == null) learn[ev.awayId] = m.away;
+          if (home == null && !taken.has(m.home)) learn[ev.homeId] = m.home;
+          if (away == null && !taken.has(m.away)) learn[ev.awayId] = m.away;
           if (!guessed.has(m.id)) guessed.set(m.id, []);
           guessed.get(m.id).push({ ev, match: m, learn, home, away });
         } else logTeams(ev, home, away);

@@ -767,6 +767,9 @@ details.more p { line-height: 1.45; margin-bottom: 8px; }
 .lnk.ball { display: flex; align-items: center; min-height: 48px; padding: 0 16px; border-top: 1px solid var(--line); font-size: 14px; }
 main > .lnk.ball, .dcol > .lnk.ball { border: 0; background: var(--surface); border-radius: 16px; }
 .accs { display: flex; flex-direction: column; background: var(--surface); border-radius: 16px; overflow: hidden; }
+/* Sabit yükseklikli esnek sütunlarda (masaüstü main / detay, .dcol, .pcol, .sec) kutular içerikleri kadar uzar, küçülmez: sütun kayar.
+   2026-11-27: overflow: hidden olan .accs küçülüp içeriği kesiyordu (Ayarlar > Teknik bilgi, 1900 px). */
+main > *, .detail > *, .dcol > *, .pcol > *, .sec > *, .accs > * { flex-shrink: 0; }
 .acc + .acc { border-top: 1px solid var(--line); }
 .acc > summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px;
   padding: 8px 14px 8px 16px; cursor: pointer; }

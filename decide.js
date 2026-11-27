@@ -81,11 +81,14 @@ const Decide = (() => {
 
   /* En iyi n seçenek (bütün pazarlar). sort: "value" (değeri olanlar değere göre önce, sonra olasılık), "prob", "odds"
      (iddaa, yoksa yurtdışı). */
+  /* %90 ve üstü olasılıklı uç çizgiler (Alt 6.5 gibi) "en iyi" listesinde gösterilmez: oranı ~1,05, oynamaya değmez (2026-11-27). */
+  const EXTREME = 0.9;
   function bestOptions(m, ctx, sort, n) {
-    const rows = rated(m, ctx);
+    const rows = rated(m, ctx).filter((r) => r.prob < EXTREME - EPS);
     const odds = (r) => r.price ?? r.option.price ?? 0;
+    const noIddaa = (x, y) => (x.price == null) - (y.price == null); // iddaa oranı olmayanlar her sıralamada sona
     const cmp = sort === "prob" ? (x, y) => y.prob - x.prob
-      : sort === "odds" ? (x, y) => odds(y) - odds(x) || y.prob - x.prob
+      : sort === "odds" ? (x, y) => noIddaa(x, y) || odds(y) - odds(x) || y.prob - x.prob
         : (x, y) => (x.ev == null) - (y.ev == null) || (x.ev != null ? y.ev - x.ev : 0) || y.prob - x.prob;
     return rows.sort(cmp).slice(0, n == null ? 3 : n);
   }
@@ -258,7 +261,7 @@ const Decide = (() => {
   const legsName = (n) => `${n}'${LI[n % 10]}`;
   const VERDICT_TEXT = { model: ["Model haklı", "good"], market: ["Piyasa haklı", "bad"], equal: ["Berabere", "plain"] };
 
-  return { PLAY, CLOSE, BAND_TEXT, breakEven, bandOf, liveCount, isLive, headline, verdict, matchBand, bestOptions, daySummary,
+  return { PLAY, CLOSE, EXTREME, BAND_TEXT, breakEven, bandOf, liveCount, isLive, headline, verdict, matchBand, bestOptions, daySummary,
     parseMatchPath, rankText, BAR_MIN, barLabels, tiles, verdictView, valueSections, valueTags, trackSummary,
     backupState, versionText, splitCoupons, valueQuestion, modelQuestion, favoriteQuestion, legsName, VERDICT_TEXT };
 })();
