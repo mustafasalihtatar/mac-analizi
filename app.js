@@ -24,10 +24,9 @@ function rememberTeams(learned) {
   if (!learned || !Object.keys(learned).length) return;
   try { localStorage.setItem(TAKIM_STORE, JSON.stringify({ ...learnedTeams(), ...learned })); } catch { /* yok sayılır */ }
 }
-const KINDS = [
-  ["safe", History.TYPE_NAMES.safe, "Tutma olasılığı görece yüksek, oranı düşük. Hiçbir kupon garanti değildir."],
-  ["risky", "Riskli", "Risk almayan viski içemez."],
-  ["slip", "Market fişi", "Çok maçlı, tamamen keyif."],
+const KINDS = [ // §40: Market fişi sitede önerilmez (sunucu yine üretir; geçmişteki fişler adıyla görünür)
+  ["safe", History.TYPE_NAMES.safe, "yüksek olasılık, düşük oran"],
+  ["risky", "Riskli", "düşük olasılık, yüksek oran"],
 ];
 const GROUPS = {
   h2h: "Maç sonucu", double_chance: "Çifte şans", totals: "Alt / üst", btts: "Karşılıklı gol", spreads: "Handikap",
@@ -2083,25 +2082,25 @@ function shareLink(legs, total, totalProb) {
 }
 /* Önerilenler: günün Düşük risk / Riskli / Market fişi kuponları (eski "Kuponlar" sekmesi). */
 function viewSuggest(root) {
-  const render = () => viewSuggest(root);
+  const render = () => { const y = window.scrollY; viewSuggest(root); window.scrollTo(0, y); };
   if (state.sport === "minor") { state.sport = "football"; state.day = firstDay(); } // oran yok → kupon yok
   const day = days()[state.day];
   const chip = (sp, lab) => h("button", { type: "button", class: "chip", "aria-pressed": state.sport === sp,
-    onclick: () => { if (state.sport !== sp) { state.sport = sp; state.day = firstDay(); render(); } } }, lab);
+    onclick: () => { if (state.sport !== sp) { state.sport = sp; state.day = firstDay(); state.builderRes = null; render(); } } }, lab);
+  const dayRender = () => { state.builderRes = null; render(); };
   const kids = [kuponHead("suggest"),
-    h("div", { class: "chip-rows" },
-      h("div", { class: "chips", role: "group", "aria-label": "Spor" }, chip("football", "Futbol"), chip("basketball", "Basketbol")),
-      days().length > 1 ? h("div", { class: "chips", role: "group", "aria-label": "Gün" }, dayChipList(render)) : null,
-      h("div", { style: "margin:2px 6px 0;text-align:left" }, oddsStamp()))];
+    h("p", { class: "lede", style: "margin:-8px 6px 0" }, [state.sport === "basketball" ? "NBA" : "Futbol", day ? dayName(day, state.sport) : null,
+      iddaaStamp()].filter(Boolean).join(" · ")),
+    h("div", { class: "chips", role: "group", "aria-label": "Spor ve gün" }, chip("football", "Futbol"), chip("basketball", "Basketbol"),
+      days().length > 1 ? [h("span", { class: "chip-sep", "aria-hidden": "true" }), ...dayChipList(dayRender)] : null)];
   const warn = oddsWarning();
   if (warn) kids.push(warn);
-  kids.push(h("div", { class: "cgrid" }, KINDS.map(([kind, title, desc]) => couponCard(day, kind, title, desc))));
-  kids.push(note(), quotaLine());
+  kids.push(h("div", { class: "cgrid" }, h("div", { class: "pcol" }, KINDS.map(([kind, title, desc]) => couponCard(day, kind, title, desc, render))),
+    builderCard(day, render)));
   root.replaceChildren(...kids.filter(Boolean));
 }
-/* §35 Önerilen kupon iddaa'ya göre yeniden kurulur (Coupons.build): kapalı / bültende olmayan seçim düşer, yerine aynı
-   kuralın sıradaki adayı girer; toplam oran, tutma ihtimali ve beklenen değer iddaa oranlarıyla. iddaa verisi yoksa ya da
-   bülten bu günü henüz açmadıysa sunucunun kuponu yurtdışı oranlarla aynen gösterilir. */
+/* §35 Önerilen kupon iddaa'ya göre yeniden kurulur (Coupons.build); §40 "Başka öner": aynı kuralın sıradaki kombinasyonları
+   (Coupons.suggestions, en fazla 4). iddaa verisi yoksa ya da bülten bu günü açmadıysa yurtdışı oranlarla. */
 const NOTE_NONE = "iddaa oranları yok; yurtdışı oranlarla kuruldu, bazı seçenekler iddaa'da kapalı olabilir.";
 const NOTE_NOTYET = "iddaa henüz bu günü açmadı; kupon yurtdışı oranlarla kuruldu.";
 function couponNotes(r, kind, n) {
@@ -2115,38 +2114,143 @@ function couponNotes(r, kind, n) {
   if (r.legs.some((l) => l.src === "yurtdışı")) out.push("Bazı maçları iddaa henüz açmadı; onlarda yurtdışı oran.");
   return out;
 }
-function couponCard(day, kind, title, desc) {
-  const c = day && day.coupons[kind];
-  const headEl = (n) => h("div", { class: "chead" }, h("h3", {}, title), n != null ? badge(`${n} maç`, "plain muted") : null);
-  if (!c) return h("section", { class: "card pad coupon-card", "aria-label": title }, headEl(null), h("p", { class: "opt-sub" }, desc),
-    h("p", { class: "muted" }, "Bu güne bu kurala uygun maç yok."));
-  const r = Coupons.build(kind, c, DATA.coupon_limits, { ...iddaaCtx(state.sport), dayStart: dayStartMs(day, state.sport) });
+/* Kupon seçim satırları + Oran / Tutma / Değer. r: {legs: [{match, key, prob, price, src}], total_odds, total_prob}. */
+function couponBody(r) {
   const legs = r.legs.map((leg) => {
     const ref = byId.get(leg.match);
-    const o = ref && ref.match.options.find((x) => x.key === leg.key);
+    const o = ref && optsOf(ref.match).find((x) => x.key === leg.key);
     if (!o) return null;
     return h("div", { class: "cl" },
       h("div", { class: "info" }, h("span", { class: "pick" }, o.pick),
-        h("span", { class: "meta" }, `${fmtTime(ref.match.kickoff)} · ${matchLabel(ref.match)}`),
+        h("span", { class: "meta" }, `${fmtTime(ref.match.kickoff)} · ${matchLabel(ref.match)} · ${pct(leg.prob)}`),
         started(ref.match) ? h("span", { class: "meta warn-t", style: "font-weight:600" }, "Başladı") : null),
-      h("div", { class: "r" }, h("b", {}, odds(leg.price)), h("small", {}, pct(leg.prob)),
+      h("div", { class: "r" }, h("b", {}, odds(leg.price)),
         h("small", { class: leg.src === "yurtdışı" ? "src warn-t" : "src" }, leg.src === "elle" ? "iddaa (elle)" : leg.src)));
   }).filter(Boolean);
-  const notes = couponNotes(r, kind, legs.length);
-  const noteEl = notes.length ? h("div", { class: "alert warn", role: "status" }, notes.map((x) => h("p", {}, x))) : null;
-  if (!legs.length) return h("section", { class: "card pad coupon-card", "aria-label": title }, headEl(0), h("p", { class: "opt-sub" }, desc),
-    noteEl, h("p", { class: "muted" }, "iddaa'da bu kurala uygun seçim kalmadı."));
-  const ev = r.mode === "iddaa" && r.legs.every((l) => l.src !== "yurtdışı") ? Iddaa.couponEV(r.legs) : null;
+  const ev = r.legs.length && r.legs.every((l) => l.src !== "yurtdışı") ? Iddaa.couponEV(r.legs) : null;
   const evLab = ev == null ? null : evText(ev, false);
-  const evCls = !evLab ? "" : evLab.band === "value" ? "good-t" : evLab.band === "low" ? "bad-t" : "";
-  return h("section", { class: "card pad coupon-card", "aria-label": title },
-    headEl(legs.length), h("p", { class: "opt-sub" }, desc), noteEl,
-    h("div", { class: "legs" }, legs),
-    h("div", { class: "sum3", style: ev == null ? "grid-template-columns:repeat(2,minmax(0,1fr))" : null },
+  const evCls = !evLab ? "" : evLab.band === "value" ? "good-t" : "bad-t";
+  return { n: legs.length, els: [h("div", { class: "legs" }, legs),
+    h("div", { class: "sum3" },
       h("div", {}, h("small", {}, "Toplam oran"), h("span", { class: "num" }, odds(r.total_odds))),
-      h("div", {}, h("small", {}, "Tutma ihtimali"), h("span", { class: "num" }, pct(r.total_prob))),
-      ev == null ? null : h("div", {}, h("small", {}, "Beklenen değer"), h("span", { class: `num ${evCls}` }, Iddaa.formatPct(ev)))),
-    h("button", { type: "button", class: "btn secondary block", onclick: () => addCoupon(r, kind) }, "Kupona al"));
+      h("div", {}, h("small", {}, "Tutma"), h("span", { class: "num" }, pct(r.total_prob))),
+      h("div", {}, h("small", {}, "Değer"), ev == null ? h("span", { class: "num muted", title: "iddaa oranı olmayan seçim var" }, "–")
+        : h("span", { class: `num ${evCls}` }, Iddaa.formatPct(ev))))] };
+}
+function couponButtons(onAdd, n, i, onNext) {
+  return h("div", { class: "btn-row" },
+    h("button", { type: "button", class: "btn primary", onclick: onAdd }, "Kuponuma ekle"),
+    h("button", { type: "button", class: "btn ghost", disabled: n < 2, onclick: onNext,
+      "aria-label": n < 2 ? "Başka öneri yok" : `Başka öner (sonraki: ${(i + 1) % n + 1}/${n})` }, n < 2 ? "Başka öneri yok" : "↻ Başka öner"));
+}
+function couponCard(day, kind, title, desc, render) {
+  const c = day && day.coupons[kind];
+  const lim = DATA.coupon_limits && DATA.coupon_limits[kind];
+  const head = h("div", { class: "chead" }, h("h3", {}, title), h("span", { class: "cdesc" }, desc));
+  const rule = lim ? `seçim başına en az %${Math.round(lim.min_prob * 100)} olasılık${lim.target ? `, toplam oran ${lim.target[0]}–${lim.target[1]}` : ""}` : "";
+  const why = (text) => h("section", { class: "card pad coupon-card", "aria-label": title }, head, h("p", { class: "ctitle" }, "Kurala uyan seçim yok."),
+    h("p", { class: "vnote" }, text, " Daha esnek bir kupon için aşağıdan kendin oluştur."));
+  if (!c) return why(`Bu gün kurala (${rule}) uyan maç yok.`);
+  const sug = Coupons.suggestions(kind, c, DATA.coupon_limits, { ...iddaaCtx(state.sport), dayStart: dayStartMs(day, state.sport) });
+  const key = `${state.sport}|${day.date}|${kind}`;
+  const idxs = state.sugIdx || (state.sugIdx = {});
+  const i = (idxs[key] || 0) % sug.length, r = sug[i];
+  const body = couponBody(r);
+  if (!body.n) {
+    const notes = couponNotes(r, kind, 0);
+    return why(`${notes.length ? `${notes.join(" ")} ` : ""}iddaa'da kurala (${rule}) uyan seçim kalmadı.`);
+  }
+  // Sonraki öneriler aynı kuralın kombinasyonları; ilk öneri sunucunun kuralı olduğu için daha iyi çıkabilirler (Düşük risk: tutma
+  // olasılığı, Riskli: olasılık × oran ile kıyas)
+  // §40: öneriler değere göre sıralı (en iyisi önce); sunucunun kuponu listede "sunucu önerisi" etiketiyle. Değişim notları
+  // (kapalı seçim, yedek aday) sadece sunucu önerisine ait.
+  const notes = r.server ? couponNotes(r, kind, body.n) : couponNotes(r, kind, body.n).filter((x) => x.startsWith("Bazı maçları"));
+  const meta = sug.length > 1 || r.server ? h("p", { class: "cmeta" }, `Öneri ${i + 1}/${sug.length}`,
+    i > 0 ? ` · ${Coupons.rankNote(kind, r, sug[0])}` : sug.length > 1 ? " · en iyi değer" : "",
+    r.server ? [" ", badge("sunucu önerisi", "plain", "xs")] : null) : null;
+  return h("section", { class: "card pad coupon-card", "aria-label": title }, head, meta,
+    notes.length ? h("div", { class: "alert warn", role: "status" }, notes.map((x) => h("p", {}, x))) : null,
+    ...body.els,
+    couponButtons(() => addCoupon(r, kind), sug.length, i, () => { idxs[key] = i + 1; render(); }));
+}
+
+/* ---------- §40 kendi kuponunu oluştur (ayarlar macanaliz.olustur.v1) ---------- */
+const BUILDER_STORE = "macanaliz.olustur.v1";
+function loadBuilder() { try { return Coupons.parseBuilder(localStorage.getItem(BUILDER_STORE)); } catch { return Coupons.builderDefaults(); } }
+function saveBuilder(s) { try { localStorage.setItem(BUILDER_STORE, Coupons.serializeBuilder(s)); } catch { /* kayıt yoksa bu oturumda kalır */ } }
+const BUILDER_MARKET_NAMES = { h2h: "Maç sonucu", double_chance: "Çifte şans", totals: "Alt/Üst", btts: "KG", nba: "NBA" };
+/* Oluşturucu adayları: seçili günün futbol maçları + (NBA seçiliyse) aynı günün NBA gecesi. Başlamış, biten, diğer lig,
+   kupona eklenemeyen, iddaa'da kapalı/bültende olmayan seçenek girmez. Oran iddaa, yoksa yurtdışı (çifte şansta sadece iddaa). */
+function builderEntries(day, s) {
+  const off = dayOffset(day, state.sport);
+  const fd = (DATA.football || []).find((d) => dayOffset(d, "football") === off);
+  const nd = (DATA.basketball || []).find((d) => dayOffset(d, "basketball") === off);
+  const out = [];
+  const add = (m, groupOf) => {
+    if (isDone(m) || started(m) || isMinor(m)) return;
+    for (const o of optsOf(m)) {
+      const g = groupOf(o);
+      if (!g || !o.addable) continue;
+      const st = legIddaa(m.id, o.key, m.kickoff);
+      if (st === "closed" || st === "absent") continue;
+      const ip = iddaaOf(m.id, o.key), price = ip ?? o.price;
+      if (price == null) continue;
+      out.push({ match: m.id, key: o.key, group: g, prob: o.prob, price, src: ip != null ? Iddaa.source(state.iddaa, m.id, o.key) || "iddaa" : "yurtdışı",
+        derived: isDerived(o), kickoff: Date.parse(m.kickoff), idx: out.length });
+    }
+  };
+  if (fd) for (const m of fd.matches) add(m, (o) => (["h2h", "double_chance", "totals", "btts"].includes(o.market) ? o.market : null));
+  if (nd && s.markets.includes("nba")) for (const m of nd.matches) add(m, (o) => (["h2h", "spreads", "totals"].includes(o.market) ? "nba" : null));
+  return out;
+}
+function builderCard(day, render) {
+  const s = loadBuilder();
+  const set = (patch) => { Object.assign(s, patch); saveBuilder(s); state.builderRes = null; render(); };
+  const numIn = (label, val, onSet, mode) => h("label", { class: "bin" }, h("span", {}, label),
+    h("input", { type: "text", inputmode: mode || "decimal", autocomplete: "off", class: "inp", value: String(val).replace(".", ","),
+      onchange: (ev) => { const v = parseNum(ev.target.value); if (Number.isFinite(v) && v > 0) onSet(v); else { toast("Geçerli bir sayı yaz"); render(); } } }));
+  const pair = (title, a, b) => h("div", { class: "bfield" }, h("p", { class: "blabel" }, title), h("div", { class: "bpair" }, a, h("span", { class: "muted", "aria-hidden": "true" }, "–"), b));
+  const stepper = h("div", { class: "bstep" },
+    h("button", { type: "button", class: "btn sm ghost", "aria-label": "Olasılığı 5 puan azalt", disabled: s.minProb <= 0.1 + 1e-9,
+      onclick: () => set({ minProb: Math.round((s.minProb - 0.05) * 100) / 100 }) }, "−"),
+    h("b", { "aria-live": "polite" }, `%${Math.round(s.minProb * 100)}`),
+    h("button", { type: "button", class: "btn sm ghost", "aria-label": "Olasılığı 5 puan artır", disabled: s.minProb >= 0.9 - 1e-9,
+      onclick: () => set({ minProb: Math.round((s.minProb + 0.05) * 100) / 100 }) }, "＋"));
+  const markets = h("div", { class: "bchips", role: "group", "aria-label": "Pazarlar" }, Coupons.BUILDER_MARKETS.map((k) =>
+    h("button", { type: "button", class: "chip", "aria-pressed": s.markets.includes(k),
+      onclick: () => set({ markets: s.markets.includes(k) ? s.markets.filter((x) => x !== k) : [...s.markets, k] }) }, BUILDER_MARKET_NAMES[k])));
+  const res = state.builderRes;
+  let out = null;
+  if (res) {
+    if (!res.list.length) out = h("div", { class: "bres", role: "status" }, h("p", { class: "ctitle" }, "Kupon çıkmadı."), h("p", { class: "vnote" }, res.reason));
+    else {
+      const i = res.i % res.list.length, c = res.list[i];
+      const r = { legs: c.legs, total_odds: c.total_odds, total_prob: c.total_prob };
+      out = h("div", { class: "bres coupon-card", role: "status" },
+        i > 0 ? h("p", { class: "vnote" }, `Öneri ${i + 1}/${res.list.length} · ${Coupons.rankNote("risky", c, res.list[0])}.`) : null,
+        ...couponBody(r).els,
+        c.legs.some((l) => l.src === "yurtdışı") ? h("p", { class: "vnote" }, "Bazı seçimlerde iddaa oranı yok; yurtdışı oranla hesaplandı.") : null,
+        couponButtons(() => addCoupon(r, "own"), res.list.length, i, () => { res.i = i + 1; render(); }));
+    }
+  }
+  return h("section", { class: "card pad builder", "aria-label": "Kendi kuponunu oluştur" },
+    h("div", {}, h("h3", { class: "btitle" }, "Kendi kuponunu oluştur"), h("p", { class: "vnote" }, "Kuralları sen koy, site en iyi kombinasyonu bulsun.")),
+    pair("Toplam oran", numIn("en az", s.minOdds.toFixed(2), (v) => set({ minOdds: v })), numIn("en çok", s.maxOdds.toFixed(2), (v) => set({ maxOdds: v }))),
+    pair("Maç sayısı", numIn("en az", s.min, (v) => set({ min: Math.min(6, Math.max(1, Math.round(v))) }), "numeric"),
+      numIn("en çok", s.max, (v) => set({ max: Math.min(6, Math.max(1, Math.round(v))) }), "numeric")),
+    h("div", { class: "bfield bline" }, h("p", { class: "blabel" }, "Seçim başına en az olasılık"), stepper),
+    h("div", { class: "bfield" }, h("p", { class: "blabel" }, "Pazarlar"), markets),
+    h("label", { class: "bcheck" }, h("span", {}, "Sadece iddaa'da artı değerli seçimler"),
+      h("input", { type: "checkbox", checked: s.onlyValue, onchange: (ev) => set({ onlyValue: ev.target.checked }) })),
+    h("label", { class: "bcheck" }, h("span", {}, "iddaa oranı olmayanları da kullan", h("small", { class: "muted" }, " (yurtdışı oranla)")),
+      h("input", { type: "checkbox", checked: s.allowForeign, onchange: (ev) => set({ allowForeign: ev.target.checked }) })),
+    h("button", { type: "button", class: "btn primary block", disabled: !day, onclick: () => {
+      const r = Coupons.custom(builderEntries(day, s), s);
+      state.builderRes = { ...r, i: 0 };
+      render();
+    } }, "Kupon oluştur"),
+    out,
+    h("p", { class: "vnote" }, "Ayarlar bu telefonda kalır. En fazla 6 maç; maç başına tek seçim, türetilmiş KG ve iddaa'da kapalı seçenekler girmez; iddaa oranı olmayan seçim sadece anahtar açıkken girer."));
 }
 
 /* ---------- görünüm: Geçmiş (§27) ---------- */
