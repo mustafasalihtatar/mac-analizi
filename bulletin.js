@@ -90,7 +90,7 @@ const Bulletin = (() => {
   /* Eşleme: lig haritada ve bu sporsa; iki takım id'si haritada; bizim maçta adlar birebir aynı, saat farkı ≤ 2 sa.
      Yedek (2026-11-27): takımlardan biri haritada yoksa maç ancak saat farkı ≤ 15 dk, haritadaki taraf birebir, haritada
      olmayan taraf adla uyuyor (nameFits; ad haritada başka id'ye bağlı değil) ve tek aday varsa eşlenir (`guessed`); yeni
-     id → ad `learned`'de döner (app.js bu cihazda hatırlar). Bir bizim maça iki iddaa maçı düşerse ikisi de bırakılır.
+     id → ad `learned`'de döner (app.js bu cihazda hatırlar). Bir bizim maça iki iddaa maçı düşerse ya da aynı bizim ada iki iddaa id'si öğrenilecekse hepsi bırakılır.
      Eşleşmeyen takım ya da maç loglanır (ters ev/deplasman da eşleşmez). */
   function match(events, ourMatches, map, sport) {
     const pairs = [], teams = [], matches = [], seen = new Set();
@@ -125,9 +125,19 @@ const Bulletin = (() => {
     }
     const learned = {};
     const paired = new Set(pairs.map((p) => p.match.id));
+    const single = [];
     for (const [id, list] of guessed) {
       if (list.length > 1 || paired.has(id)) { for (const g of list) logTeams(g.ev, g.home, g.away); continue; }
-      const g = list[0];
+      single.push(list[0]);
+    }
+    // aynı bizim ada iki farklı iddaa id'si öğrenilecekse o tahminlerin hepsi bırakılır
+    const idsOf = new Map();
+    for (const g of single) for (const [tid, name] of Object.entries(g.learn)) {
+      if (!idsOf.has(name)) idsOf.set(name, new Set());
+      idsOf.get(name).add(tid);
+    }
+    for (const g of single) {
+      if (Object.values(g.learn).some((name) => idsOf.get(name).size > 1)) { logTeams(g.ev, g.home, g.away); continue; }
       pairs.push({ ev: g.ev, match: g.match, guessed: true });
       Object.assign(learned, g.learn);
     }
