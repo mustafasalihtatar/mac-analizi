@@ -65,7 +65,12 @@ const Value = (() => {
   /* Oran hareketi metni için: ilk → son (ortalama oran), değişim oranı; iki kez görülmediyse null. */
   function move(p) {
     if (!p || !(p.odds_seen >= 2) || !p.odds_first || !p.odds_last) return null;
-    return { first: p.odds_first, last: p.odds_last, change: p.odds_last / p.odds_first - 1 };
+    // §38 kaynak değişimi hareket sayılmaz: sunucu parça parça hesaplar (odds_change); eski veride düz oran
+    if ("odds_change" in p) {
+      if (p.odds_change == null) return null;
+      return { first: p.odds_first, last: p.odds_last, change: p.odds_change, sourceChanged: !!p.odds_source_changed };
+    }
+    return { first: p.odds_first, last: p.odds_last, change: p.odds_last / p.odds_first - 1, sourceChanged: false };
   }
 
   return { build, compare, withIddaa, rowFromOption, move };

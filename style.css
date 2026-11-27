@@ -521,6 +521,8 @@ details.more p { line-height: 1.45; margin-bottom: 8px; }
 .trend .model { stroke-width: 1.5; stroke-dasharray: 4 4; opacity: .85; }
 .trend .tick { fill: var(--muted); font-size: 10.5px; }
 .trend .lab { fill: var(--text); font-size: 11.5px; font-weight: 600; }
+.trend .gap { stroke-width: 1.2; stroke-dasharray: 1 3; opacity: .7; }  /* §38 kaynak değişimi: hareket değil */
+.trend .brk { fill: var(--muted); }
 .empty-sm { margin: 0; color: var(--muted); font-size: 13px; }
 .mrow-top.fin { grid-template-columns: 48px minmax(0, 1fr) auto; }
 .fscore { font-family: var(--display); font-stretch: 85%; font-weight: 800; font-size: 24px; padding-right: 6px; white-space: nowrap; }

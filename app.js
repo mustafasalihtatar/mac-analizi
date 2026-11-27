@@ -1129,19 +1129,30 @@ function oddsChart(m) {
   const labs = [0, 1, 2].map((i) => ({ i, y: Y(last[i + 1]) })).sort((a, b) => a.y - b.y);
   for (let k = 1; k < labs.length; k++) labs[k].y = Math.max(labs[k].y, labs[k - 1].y + 13);
   const first = pts[0];
+  // §38 kaynak değişimi: çizgi orada ayrılır, iki parça noktalı ince çizgiyle birleşir, eksende ▾ işareti
+  const brk = new Set((t.breaks || []).filter((iso) => pts.some((p) => p[0] === iso)));
+  const segs = [];
+  pts.forEach((p, k) => { if (k === 0 || brk.has(p[0])) segs.push([]); segs[segs.length - 1].push(p); });
   const label = "Piyasa olasılığı, " + OUT3.map((o, i) => `${SHORT[o]} %${Math.round(first[i + 1] * 100)} → %${Math.round(last[i + 1] * 100)}`).join(", ")
-    + (md ? `. Model: ${OUT3.map((o, i) => `${SHORT[o]} %${Math.round(md[i] * 100)}`).join(", ")}` : "");
+    + (md ? `. Model: ${OUT3.map((o, i) => `${SHORT[o]} %${Math.round(md[i] * 100)}`).join(", ")}` : "")
+    + (brk.size ? `, oran kaynağı ${brk.size} kez değişti` : "");
   return sec("Oran hareketi", padCard(
     svg("svg", { viewBox: "0 0 320 146", class: "trend", role: "img", "aria-label": label },
       ticks.map((v) => [svg("line", { x1: L, x2: R, y1: Y(v), y2: Y(v), class: "grid" }),
         svg("text", { x: L - 6, y: Y(v) + 4, class: "tick", "text-anchor": "end" }, Math.round(v * 100))]),
       md ? md.map((v, i) => svg("line", { x1: L, x2: R, y1: Y(v), y2: Y(v), class: "model", style: `stroke:${TREND_COLORS[i]}` })) : null,
-      [0, 1, 2].map((i) => svg("polyline", { class: "line", style: `stroke:${TREND_COLORS[i]}`,
-        points: pts.map((p) => `${X(p[0]).toFixed(1)},${Y(p[i + 1]).toFixed(1)}`).join(" ") })),
+      [0, 1, 2].map((i) => segs.map((sg, s) => [
+        s > 0 ? svg("line", { class: "gap", style: `stroke:${TREND_COLORS[i]}`, x1: X(segs[s - 1].at(-1)[0]).toFixed(1),
+          y1: Y(segs[s - 1].at(-1)[i + 1]).toFixed(1), x2: X(sg[0][0]).toFixed(1), y2: Y(sg[0][i + 1]).toFixed(1) }) : null,
+        sg.length > 1 ? svg("polyline", { class: "line", style: `stroke:${TREND_COLORS[i]}`,
+          points: sg.map((p) => `${X(p[0]).toFixed(1)},${Y(p[i + 1]).toFixed(1)}`).join(" ") }) : null])),
+      [...brk].map((iso) => svg("path", { class: "brk", d: `M${(X(iso) - 4).toFixed(1)},${B + 2} h8 l-4,6 z` },
+        svg("title", {}, "Oran kaynağı değişti"))),
       labs.map(({ i, y }) => svg("text", { x: R + 6, y: y + 4, class: "lab" }, `${SHORT[OUT3[i]]} %${Math.round(last[i + 1] * 100)}`)),
       svg("text", { x: L, y: 140, class: "tick" }, fmtDateTime(first[0])),
       svg("text", { x: R, y: 140, class: "tick", "text-anchor": "end" }, fmtDateTime(last[0]))),
-    h("p", { class: "bars-cap" }, md ? "Düz çizgi piyasa, kesikli model." : "Piyasa olasılığı; kendi model bu maçta yok.")));
+    h("p", { class: "bars-cap" }, md ? "Düz çizgi piyasa, kesikli model." : "Piyasa olasılığı; kendi model bu maçta yok.",
+      brk.size ? " ▾ oran kaynağı değişti; oradaki sıçrama hareket değil." : null)));
 }
 /* Çizgi seçici (alt/üst, handikap): çipler + seçilen çizginin seçenekleri. */
 function lineGroup(m, title, opts, render, keyOf, labelOf, preferred) {
@@ -1333,7 +1344,7 @@ function valueRow(r) {
     r.group ? badge(r.group, "plain") : null,
     r.minor ? badge(`Adil ${odds(r.fair)}`, "plain") : badge(`Yurtdışı ${odds(r.price)}`, "plain"),
     !r.minor ? badge(`Adil ${odds(r.fair)}`, "plain muted") : null,
-    mv ? badge(`Oran ${odds(mv.first)} → ${odds(mv.last)}`, "plain muted") : null,
+    mv ? badge(`Oran ${odds(mv.first)} → ${odds(mv.last)}${mv.sourceChanged ? ` (kaynak değişti, hareket ${signedPct(mv.change)})` : ""}`, "plain muted") : null,
   ];
   return h("div", { class: "vrow row" },
     h("div", { class: "vtop" }, h("span", { class: "vpick" }, r.pick), h("span", { class: "when" }, fmtShortWhen(r.kickoff))),
