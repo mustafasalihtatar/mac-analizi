@@ -351,6 +351,15 @@ details.more p { line-height: 1.45; margin-bottom: 8px; }
 /* ---------- Maç detayı ---------- */
 .mhead { display: flex; flex-direction: column; gap: 18px; padding: 8px 4px 0; }
 .mhead .meta { text-align: center; font-size: 13px; color: var(--muted); }
+/* Tüm seçenekler ince başlığı: tek satır takımlar (+ skor), altında lig · saat · durum */
+.mhead.thin { gap: 10px; padding-top: 2px; }
+.thead { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0; font-size: 16px; font-weight: 600; line-height: 1.25; min-width: 0; }
+.thead .tname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thead .tsep { color: var(--muted); font-weight: 400; }
+.thead .tscore { font-family: var(--display); font-stretch: 80%; font-weight: 800; font-size: 20px; white-space: nowrap; padding: 0 8px;
+  border-radius: 8px; background: var(--surface-2); }
+.thead .tscore.on { color: var(--bad); }
+.mhead.thin .meta { margin: 0; }
 .versus { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; text-align: center; gap: 6px; }
 .versus .side { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
 .versus .side b { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
@@ -789,6 +798,7 @@ main > .lnk.ball, .dcol > .lnk.ball { border: 0; background: var(--surface); bor
   .orow { grid-template-columns: minmax(0, 1fr) 34px 42px 54px 40px; gap: 3px; padding-left: 12px; padding-right: 6px; }
   .orow .badd { width: 40px; }
   .orow .osrc { display: none; }
+  .orow.bcols { font-size: 10px; } /* "Olasılık" 34 px sütuna sığsın */
   .opick { font-size: 13px; }
   .opick .k { min-width: 16px; font-size: 16px; }
   .opick .otext { -webkit-line-clamp: 3; line-clamp: 3; }

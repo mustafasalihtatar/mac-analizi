@@ -1044,7 +1044,7 @@ function bestCard(m, render) {
   };
   return h("section", { class: "card best", "aria-label": "En iyi 3 seçenek" },
     h("div", { class: "bhead" }, h("p", { class: "eyebrow" }, "En iyi 3 seçenek"), sel),
-    h("div", { class: "brow bcols", "aria-hidden": "true" }, h("span", {}, "Seçenek"), h("span", {}, "Bizim"), h("span", {}, "iddaa"), h("span", {}, "Değer"), h("span")),
+    h("div", { class: "brow bcols", "aria-hidden": "true" }, h("span", {}, "Seçenek"), h("span", {}, "Olasılık"), h("span", {}, "iddaa"), h("span", {}, "Değer"), h("span")),
     rows.length ? rows.map(row) : h("p", { class: "empty-sm", style: "padding:12px 16px" }, "Bu maç için seçenek yok."),
     h("a", { class: "lnk ball", href: matchHref(m.id, true) }, `Tüm seçenekler (${m.sport === "basketball" ? "Sonuç · Sayı" : `Sonuç · Gol${m.corners ? " · Korner" : ""}`} · Takımlar) ›`));
 }
@@ -1140,33 +1140,21 @@ function viewMatchAll(root, id, from, opts) {
   const m = ref.match, nba = m.sport === "basketball";
   if (!state.mtab || state.mtab.id !== id) state.mtab = { id, tab: "result" };
   const render = () => { const y = window.scrollY; viewMatch(root, id, from, opts); window.scrollTo(0, y); };
-  const rank = (side) => {
-    const t = m.info && m.info.table, src = m.info && m.info[`${side}_src`];
-    const r = t && src && t.find((x) => x["Takım"] === src);
-    return r ? `${r["Sıra"]}. sıra` : null;
-  };
   const e = m.expected, done = isDone(m), past = !nba && !e;
   const lv = done ? null : liveOf(m.id); // §37
-  const mid = lv ? h("div", { class: "mid" }, h("small", {}, lv.state === "ended" ? (lv.certain ? "Bitti (geçici)" : "Muhtemelen bitti")
-        : lv.state === "gone" ? "Sonuç bekleniyor" : `Canlı · ${lv.label}`),
-      h("span", { class: "xg", "aria-label": `${m.home} ${lv.score.split("-")[0]}, ${m.away} ${lv.score.split("-")[1]}` }, dash(lv.score)),
-      lv.state === "ended" || lv.state === "gone" ? h("small", {}, "iddaa skoru; resmi sonuç sabah") : null)
-    : done ? h("div", { class: "mid" }, h("small", {}, "Skor"),
-      h("span", { class: "xg", "aria-label": `${m.home} ${m.score.split("-")[0]}, ${m.away} ${m.score.split("-")[1]}` }, m.score.replace("-", "–")))
-    : past ? h("div", { class: "mid" }, h("small", {}, "Sonuç"), h("span", { class: "xg sm" }, "–"))
-    : nba
-    ? h("div", { class: "mid" }, h("small", {}, "Ev sahibi farkı"), h("span", { class: "xg sm" }, e.margin == null ? "–" : signedC(e.margin)),
-        e.total != null ? h("small", {}, `toplam ${fmtDec(e.total)}`) : null)
-    : h("div", { class: "mid" }, h("small", {}, "Beklenen gol"),
-        h("span", { class: "xg", "aria-label": `${m.home} ${fmtDec(e.home)}, ${m.away} ${fmtDec(e.away)}` }, `${fmtDec(e.home)}–${fmtDec(e.away)}`));
-  const side = (s) => h("div", { class: "side" }, crest(m, s, "lg"), h("b", {}, m[s]), rank(s) ? h("small", {}, rank(s)) : null);
+  const th = Decide.thinHead(m, lv, fmtWhen(m.kickoff));
+  const aft = !done && !lv && started(m) ? liveAfter(m) || "başladı" : null;
   const tabs0 = past || done ? MTABS.football.filter(([k]) => k !== "goals") : MTABS[nba ? "basketball" : "football"];
   const tabs = !nba && !past && !done && m.corners ? [...tabs0.slice(0, 2), ["corners", "Korner"], ...tabs0.slice(2)] : tabs0; // §41
   const tab = tabs.some(([k]) => k === state.mtab.tab) ? state.mtab.tab : "result";
-  const head = h("header", { class: "mhead" },
-    h("p", { class: "meta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`, done ? " · bitti" : lv && (lv.state === "live" || lv.state === "ht") ? " · canlı" : started(m) ? ` · ${liveAfter(m) || "başladı"}` : ""),
-    h("h1", { class: "sr" }, matchLabel(m)),
-    h("div", { class: "versus" }, side("home"), mid, side("away")),
+  // İnce başlık: takımlar, saat, varsa skor (bitti / canlı iddaa skoru) — büyük "Beklenen gol" bloğu maç özetinde
+  const head = h("header", { class: "mhead thin" },
+    h("h1", { class: "thead" },
+      crest(m, "home"), h("span", { class: "tname" }, m.home),
+      th.score ? h("span", { class: th.live ? "tscore on" : "tscore", "aria-label": `, skor ${th.score},` }, th.score) : h("span", { class: "tsep" }, " – "),
+      h("span", { class: "tname" }, m.away), crest(m, "away")),
+    h("p", { class: "meta" }, [m.competition, th.when, th.status, aft, lv && (lv.state === "ended" || lv.state === "gone") ? "iddaa skoru; resmi sonuç sabah" : null]
+      .filter(Boolean).join(" · ")),
     m.report ? karneCard(m) : null,
     wide ? null : h("div", { class: "chips mchips", role: "group", "aria-label": "Pazar" }, tabs.map(([v, lab]) => // §41 sekmeler yerine pazar çipleri
       h("button", { type: "button", class: "chip", "aria-pressed": v === tab, onclick: () => { if (v !== tab) { state.mtab.tab = v; render(); } } }, lab))));
@@ -1315,10 +1303,10 @@ function optRow(m, o, render, opts) {
   paint();
   const d = diffOf(o);
   const flag = !minor && !big && !derived && d != null && Math.abs(d) >= EDGE;
-  const blendDiff = !minor && o.market === "h2h" && blendOn(m) && o.market_prob != null && Math.abs(o.prob - o.market_prob) > 0.0005;
+  const srcLab = Decide.optionSource(o, false);
   const sub = o.unverified ? `Model ${pct(o.prob)} · piyasa yok · Adil ${odds(o.fair)}`
     : minor ? `Model ${pct(o.prob)} · Adil ${odds(o.fair)}`
-    : [blendDiff ? `Harman ${pct(o.prob)} · piyasa ${pct(o.market_prob)}` : `${o.market.startsWith("corners_") ? "Piyasa" : "Bizim"} ${pct(o.prob)}`,
+    : [srcLab === "Harman" ? `Harman ${pct(o.prob)} · piyasa ${pct(o.market_prob)}` : `${srcLab} ${pct(o.prob)}`,
       o.model_prob != null ? `model ${pct(o.model_prob)}` : null, `Adil ${odds(o.fair)}`,
       derived ? "piyasa türetilmiş" : `Yurtdışı ${o.price ? odds(o.price) : "–"}`].filter(Boolean).join(" · ");
   const inK = inKupon(o.key);
@@ -1356,9 +1344,9 @@ function optRow(m, o, render, opts) {
   return { input, o, el: h("div", { class: "orow-w" },
     h("div", { class: "brow orow row" }, pickBtn, h("span", { class: "bnum" }, pct(o.prob)), cells.req, cells.price, cells.ev, add), det) };
 }
-/* Tek satırlık seçenek kartının başlık satırı. */
+/* Tek satırlık seçenek kartının başlık satırı. Olasılığın kaynağını (piyasa / model / harman) satır detayı söyler. */
 const optHead = () => h("div", { class: "brow orow bcols", "aria-hidden": "true" },
-  h("span", {}, "Seçenek"), h("span", {}, "Bizim"), h("span", { class: "oreq" }, "Gereken"), h("span", {}, "Oran"), h("span", {}, "Değer"), h("span"));
+  h("span", {}, "Seçenek"), h("span", {}, "Olasılık"), h("span", { class: "oreq" }, "Gereken"), h("span", {}, "Oran"), h("span", {}, "Değer"), h("span"));
 const pctPlain = (x) => Iddaa.formatPct(x).replace(/^\+/, "");
 /* MS kar payı: maçın tüm MS sonuçlarının iddaa oranı girilince (futbol 1-X-2, NBA 1-2). */
 function marginLine(m, rows) {
@@ -1457,47 +1445,35 @@ function optionsCard(m, opts, render, big) {
   const rows = opts.map((o) => optRow(m, o, render, { big: big ? SHORT[o.outcome] : null }));
   return { rows, el: ocard(optHead(), rows.map((r) => r.el)) };
 }
+/* Tüm seçenekler > Sonuç: 1, X, 2 ve çifte şans tek satırlık seçenek tablosunda (olasılık barları, harman/model notu ve oran
+   hareketi maç özetinin açılır bölümlerinde). Biten / geçmiş maçta donmuş maç öncesi olasılıklar, iddaa girişi ve ＋ yok. */
 function resultTab(m, render) {
   const minor = isMinor(m), nba = m.sport === "basketball";
-  const outs = outsOf(m);
-  const shown = probs3(m, "prob");
-  const md = minor ? null : probs3(m, "model_prob");
-  const mk = minor ? null : probs3(m, "market_prob");
   const out = [];
   const warn = !minor && oddsWarning();
   if (warn) out.push(warn);
-  if (shown) {
-    const topP = Math.max(...shown);
-    const e = edgeOf(m);
-    const r = (v) => v.map((x) => Math.round(x * 100)).join(" · ");
-    out.push(sec("Maç sonucu", padCard(
-      h("div", { class: "big3", "aria-label": outs.map((k, i) => `${nba ? (k === "home" ? m.home : m.away) : SHORT[k]} %${Math.round(shown[i] * 100)}`).join(", ") },
-        outs.map((k, i) => h("div", { "aria-hidden": "true" }, h("small", {}, nba ? `${SHORT[k]} · ${k === "home" ? m.home : m.away}` : SHORT[k]),
-          h("span", { class: shown[i] === topP ? "v top" : "v" }, Math.round(shown[i] * 100))))),
-      h("div", { class: "bars" }, pbar(shown, "lg"), md ? pbar(md, "model") : null,
-        h("div", { class: "bars-cap" },
-          h("span", {}, minor ? "Sadece kendi model; piyasa yok." : md
-            ? `Üst: ${blendOn(m) ? "harman" : "piyasa"} · alt: model (${r(md)})` : `${blendOn(m) ? "Harman" : "Piyasa"}; kendi model bu maçta yok.`),
-          e ? badge(edgeText(e), "accent") : null),
-        blendOn(m) && mk ? h("span", { class: "bars-cap" }, `Piyasa: ${r(mk)}`) : null))));
+  const h2h = m.options.filter((o) => o.market === "h2h"), dc = m.options.filter((o) => o.market === "double_chance");
+  if (!nba && !minor && !m.expected) { // §32 geçmiş maç: donmuş 1X2; iddaa/kupon yok
+    if (h2h.length) out.push(sec("Maç sonucu", ocard(optHead(), h2h.map((o) => h("div", { class: "orow-w" },
+      h("div", { class: "brow orow row" }, h("span", { class: "bpick opick" }, h("span", { class: "k", "aria-hidden": "true" }, SHORT[o.outcome]),
+        h("span", { class: "otext" }, o.pick)), h("span", { class: "bnum" }, pct(o.prob)), h("span", { class: "bnum oreq muted" }, "–"),
+        h("span", { class: "bnum" }, odds(o.price || o.fair), h("small", { class: "osrc", title: o.price ? "yurtdışı oran" : "adil oran" }, o.price ? "y" : "a")),
+        h("span", { class: "bnum muted" }, "–"), h("span"))))),
+      h("p", { class: "sec-note" }, "Maç başlamadan önceki son olasılıklar.")));
+    return out;
   }
-  if (m.sport === "football") out.push(oddsChart(m));
-  if (!nba && !minor && !m.expected) return out; // §32 geçmiş maç: donmuş 1X2 + oran grafiği; iddaa/kupon yok
-  const h2h = m.options.filter((o) => o.market === "h2h");
-  if (h2h.length) {
+  if (h2h.length || dc.length) {
     let margin = null;
     const rows = h2h.map((o) => optRow(m, o, render, { big: SHORT[o.outcome], onLive: () => margin && margin.update() }));
-    margin = marginLine(m, rows);
-    out.push(sec("İddaa oranların", ocard(optHead(), rows.map((r) => r.el), margin.el),
+    margin = h2h.length ? marginLine(m, rows) : null;
+    const dcRows = dc.map((o) => optRow(m, o, render));
+    out.push(sec("Maç sonucu", ocard(optHead(), rows.map((r) => r.el), dcRows.map((r) => r.el), margin ? margin.el : null),
       h("p", { class: "sec-note" }, "Seçeneğe dokun, açılan kutuya iddaa'da gördüğün oranı yaz: değer = olasılık × oran − 1. Oranın yanındaki harf kaynağı: i iddaa, y yurtdışı, a adil. ",
         minor ? "Bu ligde model doğrulanmamış; renk verilmez." : `+%${bandPct()} üstü değerli, −%${bandPct()} altı düşük, arası adil.`,
         " Oran bu cihazda kalır, Kuponum'a da geçer. Otomatik çekilen oranın altında “iddaa”, senin yazdığında “elle” yazar.")));
   }
-  const dc = m.options.filter((o) => o.market === "double_chance");
-  if (dc.length) out.push(sec("Çifte şans", optionsCard(m, dc, render).el));
   const hc = optsOf(m).filter((o) => o.market === "handicap3"); // §34 sadece iddaa'da çizgisi varsa
   if (hc.length) out.push(lineGroup(m, "Handikaplı MS", hc, render, (o) => o.line, hcapLabel, -1));
-  out.push(explain(m));
   return out;
 }
 /* §31 MS piyasa olasılığının zaman içindeki değişimi: düz çizgiler piyasa (1/X/2 renkleri), kesikli yatay çizgiler model.

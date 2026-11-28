@@ -271,10 +271,27 @@ const Decide = (() => {
     const ev = has && !f.minor && !f.derived && !f.unverified ? o.prob * price - 1 : null;
     return { prob: o.prob, required: has ? 1 / price : null, ev, band: ev == null ? "none" : bandOf(ev), src: has ? "iddaa" : null };
   }
+  /* Tüm seçenekler satır detayındaki kaynak etiketi (sütun başlığı her tabloda "Olasılık"): gösterilen olasılık neyin?
+     "Model" (diğer lig, NBA'de piyasası olmayan iddaa çizgisi), "Piyasa" (§41 korner ve olasılığı piyasaya eşit her seçenek),
+     aksi "Harman": §26-5 harman açıkken skor matrisi harmanın 1X2'sine göre ölçeklenir, alt/üst ve (türetilmiş) KG de kayar. */
+  function optionSource(o, minor) {
+    if (minor || o.unverified) return "Model";
+    if (o.market.startsWith("corners_")) return "Piyasa";
+    if (o.market_prob == null) return "Model";
+    return Math.abs(o.prob - o.market_prob) < 0.0005 ? "Piyasa" : "Harman";
+  }
+  /* Tüm seçenekler ince başlığı: "Ev – Dep", saat metni, skor (bitti ya da canlı) ve durum. lv = Live.view ya da null. */
+  function thinHead(m, lv, when) {
+    const done = m.score != null;
+    const score = done ? m.score : lv && lv.state !== "gone" && lv.score ? lv.score : null;
+    const status = done ? "bitti" : !lv ? null : lv.state === "ended" ? (lv.certain ? "bitti (geçici)" : "muhtemelen bitti")
+      : lv.state === "gone" ? "sonuç bekleniyor" : lv.state === "ht" ? lv.label : `canlı ${lv.label}`;
+    return { teams: `${m.home} – ${m.away}`, when, score: score ? String(score).replace("-", "–") : null, status, live: !done && !!lv && (lv.state === "live" || lv.state === "ht") };
+  }
 
   return { PLAY, CLOSE, EXTREME, BAND_TEXT, breakEven, bandOf, liveCount, isLive, headline, verdict, matchBand, bestOptions, daySummary,
     parseMatchPath, rankText, BAR_MIN, barLabels, tiles, verdictView, valueSections, valueTags, trackSummary,
-    backupState, versionText, splitCoupons, valueQuestion, modelQuestion, favoriteQuestion, legsName, VERDICT_TEXT, rowView, canAdd };
+    backupState, versionText, splitCoupons, valueQuestion, modelQuestion, favoriteQuestion, legsName, VERDICT_TEXT, rowView, canAdd, optionSource, thinHead };
 })();
 
 if (typeof module !== "undefined") module.exports = Decide;
