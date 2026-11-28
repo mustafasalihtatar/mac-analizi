@@ -56,7 +56,8 @@ const History = (() => {
         return ok === undefined ? null : res(ok);
       }
       case "btts": return k.outcome === "yes" ? res(h > 0 && a > 0) : k.outcome === "no" ? res(!(h > 0 && a > 0)) : null;
-      case "totals": {
+      case "totals":
+      case "corners_totals": { // §41 korner: "skor" yerine korner sayıları ("6-5") verilir
         if (k.line == null || !["over", "under"].includes(k.outcome)) return null;
         const t = h + a;
         if (t === k.line) return "void";
@@ -82,13 +83,30 @@ const History = (() => {
      §37 geçici (iddaa canlı) skor. */
   function legResult(leg) {
     if (MANUAL.includes(leg.manual)) return leg.manual;
-    if (leg.status === "finished") return legFromScore(leg.key, leg.score);
-    if (leg.status == null && leg.prov) return legFromScore(leg.key, leg.prov.score);
+    const b = legBasis(leg);
+    return b && b.score != null ? legFromScore(leg.key, b.score) : null;
+  }
+  const isCorner = (key) => { const k = parseKey(key); return !!k && k.market.startsWith("corners_"); };
+  /* Seçimi sonuçlandıran sayı: {kind: goals|corners, score: "ev-dep"|null, official} | null (durum yok, geçici skor yok).
+     §41 korner seçimi gol skoruyla değil korner sayısıyla sonuçlanır; resmi skor gelip resmi korner henüz gelmediyse (LFA ertesi
+     sabah) iddaa canlı korneri geçici olarak geçer. */
+  function legBasis(leg) {
+    if (isCorner(leg.key)) {
+      if (leg.status === "finished" && leg.corners) return { kind: "corners", score: leg.corners, official: true };
+      const open = leg.status == null || leg.status === "finished";
+      if (open && leg.prov && leg.prov.corners) return { kind: "corners", score: leg.prov.corners, official: false };
+      return leg.status === "finished" ? { kind: "corners", score: null, official: false } : null;
+    }
+    if (leg.status === "finished") return { kind: "goals", score: leg.score, official: true };
+    if (leg.status == null && leg.prov) return { kind: "goals", score: leg.prov.score, official: false };
     return null;
   }
   /* Sonucu geçici skordan mı geliyor. */
-  const legProvisional = (leg) => !MANUAL.includes(leg.manual) && leg.status == null && !!leg.prov
-    && legFromScore(leg.key, leg.prov.score) !== null;
+  const legProvisional = (leg) => {
+    if (MANUAL.includes(leg.manual)) return false;
+    const b = legBasis(leg);
+    return !!b && !b.official && b.score != null && legFromScore(leg.key, b.score) !== null;
+  };
   /* Elle sonuçlandırılması gereken (ertelendi / iptal / uzatma) ve elle girilmemiş seçim. */
   const needsManual = (leg) => PENDING_STATUSES.includes(leg.status) && !MANUAL.includes(leg.manual);
 
@@ -122,7 +140,8 @@ const History = (() => {
     return changed;
   }
 
-  /* §37 iddaa'da biten maçların geçici skoru ([{id, score, certain}]) → resmi/elle sonucu olmayan seçimlere `prov`. Değişen kupon sayısı. */
+  /* §37 iddaa'da biten maçların geçici skoru ([{id, score, certain, corners?}]) → resmi/elle sonucu olmayan seçimlere `prov`
+     (§41 corners: iddaa korner sayısı "ev-dep" | null). Değişen kupon sayısı. */
   function applyProvisional(store, items, nowIso) {
     const by = new Map((items || []).filter((x) => x && typeof x.id === "string" && parseScore(x.score)).map((x) => [x.id, x]));
     let changed = 0;
@@ -130,10 +149,12 @@ const History = (() => {
       let touched = false;
       for (const l of c.legs) {
         const x = by.get(l.matchId);
-        if (!x || l.status != null || MANUAL.includes(l.manual)) continue;
+        const cornerOpen = isCorner(l.key) && l.status === "finished" && !l.corners; // §41 resmi korner henüz yok
+        if (!x || (l.status != null && !cornerOpen) || MANUAL.includes(l.manual)) continue;
         const certain = x.certain === true;
-        if (l.prov && l.prov.score === x.score && l.prov.certain === certain) continue;
-        l.prov = { score: String(x.score), at: nowIso, certain };
+        const corners = parseScore(x.corners) ? String(x.corners) : null;
+        if (l.prov && l.prov.score === x.score && l.prov.certain === certain && (l.prov.corners ?? null) === corners) continue;
+        l.prov = { score: String(x.score), at: nowIso, certain, ...(corners ? { corners } : {}) };
         touched = true;
       }
       if (touched) { c.updatedAt = nowIso; changed++; }
@@ -152,9 +173,15 @@ const History = (() => {
         const r = by.get(l.matchId);
         if (!r) continue;
         const score = r.score == null ? null : String(r.score);
+        const corners = Array.isArray(r.corners) && r.corners.length === 2 ? `${r.corners[0]}-${r.corners[1]}` : null; // §41
+        if (corners && l.corners !== corners) { // korner skordan sonra da gelebilir
+          l.corners = corners; touched = true;
+          if (l.prov) l.prov = null;
+        }
         if (l.status === "finished" && l.score) continue; // biten maçın skoru bir kez yazılır
         if (l.status !== r.status || l.score !== score) { l.status = r.status; l.score = score; touched = true; }
-        if (l.prov) { l.prov = null; touched = true; } // §37 resmi durum geldi: geçici skor artık geçmez
+        // §37 resmi durum geldi: geçici skor artık geçmez. §41 korner seçiminde resmi korner gelene kadar geçici korner kalır
+        if (l.prov && !(isCorner(l.key) && !l.corners && r.status === "finished")) { l.prov = null; touched = true; }
       }
       if (touched) { c.updatedAt = new Date().toISOString(); changed++; }
     }
@@ -298,7 +325,7 @@ const History = (() => {
   }
   const serialize = (store) => JSON.stringify({ version: VERSION, budget: store.budget, coupons: store.coupons }, null, 1);
 
-  return { VERSION, TYPES, TYPE_NAMES, normType, detectType, parseKey, parseScore, legFromScore, legResult, legProvisional, needsManual,
+  return { VERSION, TYPES, TYPE_NAMES, normType, detectType, parseKey, parseScore, legFromScore, legResult, legBasis, legProvisional, needsManual,
     settle, applyResults, applyProvisional, withdrawProvisional, monthKey, summarize, byType, calibration, budgetState, makeCoupon, emptyStore, parseStore,
     mergeStores, serialize };
 })();

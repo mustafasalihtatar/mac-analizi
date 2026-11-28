@@ -19,6 +19,7 @@ const Bulletin = (() => {
       "2_101": { market: "totals", line: true, lines: ["1.5", "2.5", "3.5"], out: { Alt: "under", "Üst": "over" } },
       "2_89": { market: "btts", out: { Var: "yes", Yok: "no" } },
       "2_100": { market: "handicap3", line: true, lines: ["-3", "-2", "-1", "1", "2", "3"], out: { 1: "home", 0: "draw", 2: "away" } },
+      "2_48": { market: "corners_totals", line: true, out: { Alt: "under", "Üst": "over" } }, // §41 toplam korner (sadece piyasa çizgileri)
     },
     basketball: {
       "1_2": { market: "h2h", out: { 1: "home", 2: "away" } },
@@ -148,6 +149,8 @@ const Bulletin = (() => {
     return { pairs, learned, log: { teams, matches } };
   }
 
+  /* Maçın iddaa oranı kaydedilebilecek seçenek anahtarları: data.json seçenekleri + §41 korner seçenekleri (corners.options). */
+  const optionKeys = (match) => new Set([...(match.options || []), ...((match.corners && match.corners.options) || [])].map((o) => o.key));
   const keyOf = (id, market, outcome, line) => `${id}|${market}|${outcome}|${line == null ? "" : line}`;
   /* Bizde karşılığı olan seçenek mi: data.json seçeneği, ya da `lines` tablosunda çizgisi olan ek seçenek. */
   function linesHas(match, market, outcome, line) {
@@ -162,7 +165,7 @@ const Bulletin = (() => {
   /* Eşleşen maçın oranları → {odds: {anahtar: oran}, unknown}. unknown: tablo dışı ya da bizde karşılığı olmayan seçenek. */
   function oddsFor(ev, match, sport) {
     const table = MARKETS[sport] || {};
-    const known = new Set((match.options || []).map((o) => o.key));
+    const known = optionKeys(match);
     const odds = {};
     let unknown = 0;
     for (const m of ev.markets) {
@@ -250,7 +253,7 @@ const Bulletin = (() => {
     return !Number.isFinite(t) || nowMs - t >= EVERY_MS;
   }
 
-  return { MARKETS, url, parse, match, normName, nameFits, oddsFor, collect, extraOptions, due, parseKey };
+  return { MARKETS, url, parse, match, normName, nameFits, oddsFor, collect, extraOptions, due, parseKey, optionKeys };
 })();
 
 if (typeof module !== "undefined") module.exports = Bulletin;

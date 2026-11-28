@@ -26,7 +26,8 @@ const Live = (() => {
       const hc = x && x.ht && x.ht.c, ac = x && x.at && x.at.c;
       if (!x || !isNum(x.id) || !isNum(x.s) || !isNum(hc) || !isNum(ac)) { bad++; continue; }
       scores[x.id] = { code: x.s, min: numOrNull(x.min), sec: numOrNull(x.sec), home: hc, away: ac,
-        homeReg: numOrNull(x.ht.r), awayReg: numOrNull(x.at.r), t: numOrNull(x.t) };
+        homeReg: numOrNull(x.ht.r), awayReg: numOrNull(x.at.r), t: numOrNull(x.t),
+        homeCo: numOrNull(x.ht.co), awayCo: numOrNull(x.at.co) }; // §41 korner (iddaa `co`)
     }
     if (bad * 2 > raw.length) return FORMAT_ERROR;
     const events = [];
@@ -98,7 +99,8 @@ const Live = (() => {
     return "Canlı";
   }
 
-  /* Maç görünümü: {state, label, score, settleScore, provisional, certain, trusted} | null (tabloda hiç yoksa). */
+  /* Maç görünümü: {state, label, score, settleScore, corners, settleCorners, provisional, certain, trusted} | null (tabloda
+     hiç yoksa). §41 corners: iddaa korner sayısı "ev-dep"; settleCorners sadece settleScore verildiğinde (bitti + güvenilir). */
   function view(table, id, sport) {
     const live = table.scores[id], gone = table.gone[id];
     const s = live || (gone && gone.score);
@@ -114,14 +116,30 @@ const Live = (() => {
       if (sport === "basketball") settleScore = `${s.home}-${s.away}`;
       else if (s.homeReg != null && s.awayReg != null) settleScore = `${s.homeReg}-${s.awayReg}`;
     }
-    return { state, label, score: `${s.home}-${s.away}`, settleScore, provisional: settleScore != null, certain: ended && certain, trusted };
+    const corners = s.homeCo != null && s.awayCo != null ? `${s.homeCo}-${s.awayCo}` : null;
+    return { state, label, score: `${s.home}-${s.away}`, settleScore, corners, settleCorners: settleScore != null ? corners : null,
+      provisional: settleScore != null, certain: ended && certain, trusted };
+  }
+
+  /* Kupon seçiminin canlı satır metni. §41 korner seçiminde gol skoru yerine iddaa korner sayısı. */
+  function legText(key, v) {
+    const k = History.parseKey(key), corner = !!k && k.market.startsWith("corners_");
+    const dash = (x) => String(x).replace("-", "–");
+    const val = corner ? (v.corners ? `korner ${dash(v.corners)}` : "korner sayısı yok") : dash(v.score);
+    const settle = corner ? v.settleCorners : v.settleScore;
+    if (v.state === "ended") {
+      const t = v.certain ? `Bitti · ${val} (iddaa)` : `Muhtemelen bitti · son ${corner ? val : `skor ${val}`}`;
+      return settle ? t : `${t} · durum kodu tanınmadı, sonuç sabah`;
+    }
+    if (v.state === "gone") return `Sonuç bekleniyor · son ${corner ? val : `skor ${val}`}`;
+    return `${v.label} · ${val}`;
   }
 
   /* Maç bitmeden kesinleşen sonuç: üst tuttu, alt yattı, KG var tuttu, KG yok yattı. */
   function decidedEarly(key, result) {
     const k = History.parseKey(key);
     if (!k) return false;
-    if (k.market === "totals") return (k.outcome === "over" && result === "won") || (k.outcome === "under" && result === "lost");
+    if (k.market === "totals" || k.market === "corners_totals") return (k.outcome === "over" && result === "won") || (k.outcome === "under" && result === "lost");
     if (k.market === "btts") return (k.outcome === "yes" && result === "won") || (k.outcome === "no" && result === "lost");
     return false;
   }
@@ -129,11 +147,13 @@ const Live = (() => {
   /* Seçimin canlı durumu: {result, decided, provisional, certain} | null. */
   function legState(key, v) {
     if (!v || v.state === "gone") return null;
+    const k = History.parseKey(key), corner = !!k && k.market.startsWith("corners_"); // §41
     if (v.state === "ended") {
-      const r = v.settleScore == null ? null : History.legFromScore(key, v.settleScore);
+      const fin = corner ? v.settleCorners : v.settleScore;
+      const r = fin == null ? null : History.legFromScore(key, fin);
       return r ? { result: r, decided: true, provisional: true, certain: v.certain } : null;
     }
-    const r = History.legFromScore(key, v.score);
+    const r = History.legFromScore(key, corner ? v.corners : v.score);
     return r ? { result: r, decided: v.trusted && decidedEarly(key, r), provisional: false, certain: false } : null;
   }
 
@@ -155,7 +175,7 @@ const Live = (() => {
     return next.length ? Math.min(...next) : null;
   }
 
-  return { ST, EVERY_MS, KNOWN, wakeAt, url, parse, emptyTable, merge, needsFull, view, legState, couponNow, delay };
+  return { ST, EVERY_MS, KNOWN, wakeAt, url, parse, emptyTable, merge, needsFull, view, legState, legText, couponNow, delay };
 })();
 
 if (typeof module !== "undefined") module.exports = Live;

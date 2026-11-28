@@ -194,7 +194,7 @@ const Coupons = (() => {
   }
 
   /* ---------- kendi kuponunu oluştur ---------- */
-  const BUILDER_MARKETS = ["h2h", "double_chance", "totals", "btts", "nba"];
+  const BUILDER_MARKETS = ["h2h", "double_chance", "totals", "btts", "corners", "nba"];
   const builderDefaults = () => ({ minOdds: 2, maxOdds: 5, min: 2, max: 4, minProb: 0.3, markets: ["h2h", "double_chance"], onlyValue: false,
     allowForeign: false }); // allowForeign: iddaa oranı olmayan seçimler yurtdışı oranla girsin mi (varsayılan hayır)
   /* Kayıt metni → ayarlar. Hiç fırlatmaz; bozuk ya da geçersiz alan varsayılana döner, sınırlar kırpılır. */
@@ -217,14 +217,15 @@ const Coupons = (() => {
   }
   const serializeBuilder = (s) => JSON.stringify({ version: 1, ...s });
 
-  /* entries: {match, key, group (h2h|double_chance|totals|btts|nba), prob, price, src, derived, kickoff, idx}.
+  /* entries: {match, key, group (h2h|double_chance|totals|btts|corners|nba), prob, price, src, derived, kickoff, idx}.
      → {list: combos (değere göre), reason: boşsa neden}. */
   function custom(entries, s) {
     const fail = (reason) => ({ list: [], reason });
     if (s.minOdds > s.maxOdds) return fail("En az oran en çok orandan büyük.");
     if (s.min > s.max) return fail("En az maç sayısı en çok maç sayısından büyük.");
     if (!s.markets.length) return fail("En az bir pazar seç.");
-    let pool = (entries || []).filter((e) => !e.derived && s.markets.includes(e.group) && e.prob >= s.minProb - 1e-9 && e.price > 1);
+    let pool = (entries || []).filter((e) => !e.derived && s.markets.includes(e.group) && e.prob >= s.minProb - 1e-9 && e.price > 1
+      && !(e.group === "corners" && e.src === "yurtdışı")); // §41 korner sadece iddaa oranıyla (sadece piyasa, model yok)
     if (!pool.length) return fail(`Seçilen pazarlarda olasılığı %${Math.round(s.minProb * 100)} ve üstü seçenek yok.`);
     if (!s.allowForeign) {
       pool = pool.filter((e) => e.src !== "yurtdışı");

@@ -764,8 +764,35 @@ details.more p { line-height: 1.45; margin-bottom: 8px; }
 .badd { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: transparent; color: var(--text);
   display: inline-flex; align-items: center; justify-content: center; }
 .badd[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.badd:disabled { color: var(--muted); border-style: dashed; opacity: .6; cursor: not-allowed; }
 .lnk.ball { display: flex; align-items: center; min-height: 48px; padding: 0 16px; border-top: 1px solid var(--line); font-size: 14px; }
 main > .lnk.ball, .dcol > .lnk.ball { border: 0; background: var(--surface); border-radius: 16px; }
+/* §41 Tüm seçenekler tek satırı: En iyi 3 satırı + gereken sütunu; seçime dokununca altında detay (iddaa girişi). */
+.orow { grid-template-columns: minmax(0, 1fr) 40px 40px 56px 56px 44px; }
+.orow-w + .orow-w { border-top: 1px solid var(--line); }
+.opick { background: none; border: 0; padding: 4px 0; margin: 0; color: var(--text); font: inherit; font-size: 14px; font-weight: 600;
+  text-align: left; cursor: pointer; flex-wrap: nowrap; min-height: 44px; }
+.opick .otext { overflow: hidden; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; min-width: 0; line-height: 1.25; }
+.opick .k { font-family: var(--display); font-weight: 800; font-size: 18px; min-width: 22px; flex: 0 0 auto; }
+.opick[aria-expanded="true"] .otext { text-decoration: underline; text-underline-offset: 3px; }
+.osrc { font-size: 10px; font-weight: 600; color: var(--muted); margin-left: 2px; }
+.orow-d { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; align-items: start; padding: 2px 12px 12px 16px; }
+.orow-d[hidden] { display: none; }
+.orow-d .opt-in { justify-content: flex-start; }
+.ocard { container-type: inline-size; }
+@container (max-width: 399px) { /* dar kart (telefon, masaüstü dar sütun): gereken sütunu detaya iner */
+  .orow { grid-template-columns: minmax(0, 1fr) 40px 54px 56px 44px; }
+  .orow .oreq { display: none; }
+}
+@container (max-width: 330px) { /* çok dar kart: sayı sütunları daralır, seçim adı 3 satıra kadar */
+  .orow { grid-template-columns: minmax(0, 1fr) 34px 42px 54px 40px; gap: 3px; padding-left: 12px; padding-right: 6px; }
+  .orow .badd { width: 40px; }
+  .orow .osrc { display: none; }
+  .opick { font-size: 13px; }
+  .opick .k { min-width: 16px; font-size: 16px; }
+  .opick .otext { -webkit-line-clamp: 3; line-clamp: 3; }
+  .orow-d { grid-template-columns: 68px minmax(0, 1fr); padding-left: 12px; }
+}
 .accs { display: flex; flex-direction: column; background: var(--surface); border-radius: 16px; overflow: hidden; }
 /* Sabit yükseklikli esnek sütunlarda (masaüstü main / detay, .dcol, .pcol, .sec) kutular içerikleri kadar uzar, küçülmez: sütun kayar.
    2026-11-27: overflow: hidden olan .accs küçülüp içeriği kesiyordu (Ayarlar > Teknik bilgi, 1900 px). */

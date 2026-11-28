@@ -261,9 +261,20 @@ const Decide = (() => {
   const legsName = (n) => `${n}'${LI[n % 10]}`;
   const VERDICT_TEXT = { model: ["Model haklı", "good"], market: ["Piyasa haklı", "bad"], equal: ["Berabere", "plain"] };
 
+  /* §41 Tüm seçenekler tek satırı: {prob, required (1 ÷ oran | null), ev (değer | null), band (play|close|skip|none), src}.
+     Değer sadece iddaa oranı varken ve seçenek türetilmiş / doğrulanmamış / diğer lig değilken hesaplanır. */
+  /* ＋ düğmesi etkin mi: §41 korner sadece iddaa oranıyla kupona girer (yurtdışı oranla değil); diğerleri addable ya da diğer lig. */
+  const canAdd = (o, iddaaPrice, minor) => (o.market.startsWith("corners_") ? iddaaPrice != null && iddaaPrice > 1 : !!(o.addable || minor));
+  function rowView(o, price, flags) {
+    const f = flags || {};
+    const has = price != null && price > 1;
+    const ev = has && !f.minor && !f.derived && !f.unverified ? o.prob * price - 1 : null;
+    return { prob: o.prob, required: has ? 1 / price : null, ev, band: ev == null ? "none" : bandOf(ev), src: has ? "iddaa" : null };
+  }
+
   return { PLAY, CLOSE, EXTREME, BAND_TEXT, breakEven, bandOf, liveCount, isLive, headline, verdict, matchBand, bestOptions, daySummary,
     parseMatchPath, rankText, BAR_MIN, barLabels, tiles, verdictView, valueSections, valueTags, trackSummary,
-    backupState, versionText, splitCoupons, valueQuestion, modelQuestion, favoriteQuestion, legsName, VERDICT_TEXT };
+    backupState, versionText, splitCoupons, valueQuestion, modelQuestion, favoriteQuestion, legsName, VERDICT_TEXT, rowView, canAdd };
 })();
 
 if (typeof module !== "undefined") module.exports = Decide;

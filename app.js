@@ -189,6 +189,7 @@ function sec(title, ...kids) {
   return h("section", { class: "sec" }, title ? h("h2", { class: "sec-h" }, title) : null, ...kids);
 }
 const card = (...kids) => h("div", { class: "card" }, ...kids);
+const ocard = (...kids) => h("div", { class: "card ocard" }, ...kids); // §41 tek satırlık seçenek kartı (container)
 /* Masaüstünde iki sütun (≥ 1024 px, yeterli genişlikte); mobilde display: contents — DOM sırası ve görünüm aynı kalır. */
 const twoCol = (left, right) => h("div", { class: "pgrid" },
   h("div", { class: "pcol" }, left.filter(Boolean)), h("div", { class: "pcol" }, right.filter(Boolean)));
@@ -268,7 +269,7 @@ function addCoupon(c, kind) {
   let added = 0, late = 0;
   for (const leg of c.legs) {
     const ref = byId.get(leg.match);
-    const o = ref && ref.match.options.find((x) => x.key === leg.key);
+    const o = ref && optionByKey(ref.match, leg.key);
     if (o && !inKupon(o.key)) {
       state.kupon.push(legFrom(ref.match, o, kind)); added++;
       if (started(ref.match)) late++;
@@ -321,7 +322,7 @@ function iddaaCtx(sport) {
     kickoff: (m) => (ref(m) ? new Date(ref(m).match.kickoff).getTime() : NaN),
     started: (m) => !!ref(m) && started(ref(m).match),
     option: (m, key) => {
-      const o = ref(m) && ref(m).match.options.find((x) => x.key === key);
+      const o = ref(m) && optionByKey(ref(m).match, key);
       return o ? { prob: o.prob, price: o.price } : null;
     },
   };
@@ -525,7 +526,7 @@ async function fetchLive(sport, cands, st) {
   for (const [id, x] of state.liveIds) {
     if (x.sport !== sport) continue;
     const v = Live.view(t, x.iddaaId, sport);
-    if (v && v.state === "ended" && v.settleScore) items.push({ id, score: v.settleScore, certain: v.certain });
+    if (v && v.state === "ended" && v.settleScore) items.push({ id, score: v.settleScore, certain: v.certain, corners: v.settleCorners });
     else if (v && (v.state === "live" || v.state === "ht")) back.push(id); // muhtemel bitti sayılmıştı ama yeniden canlı
   }
   const w = back.length ? History.withdrawProvisional(state.history, back, at) : 0;
@@ -1020,7 +1021,7 @@ function bestCard(m, render) {
     h("div", { class: "bhead" }, h("p", { class: "eyebrow" }, "En iyi 3 seçenek"), sel),
     h("div", { class: "brow bcols", "aria-hidden": "true" }, h("span", {}, "Seçenek"), h("span", {}, "Bizim"), h("span", {}, "iddaa"), h("span", {}, "Değer"), h("span")),
     rows.length ? rows.map(row) : h("p", { class: "empty-sm", style: "padding:12px 16px" }, "Bu maç için seçenek yok."),
-    h("a", { class: "lnk ball", href: matchHref(m.id, true) }, `Tüm seçenekler (${m.sport === "basketball" ? "Sonuç · Sayı" : "Sonuç · Gol"} · Takımlar) ›`));
+    h("a", { class: "lnk ball", href: matchHref(m.id, true) }, `Tüm seçenekler (${m.sport === "basketball" ? "Sonuç · Sayı" : `Sonuç · Gol${m.corners ? " · Korner" : ""}`} · Takımlar) ›`));
 }
 /* Açılır bölüm: başlık + tek satır özet; içerik ilk açılışta kurulur. */
 function acc(title, sub, build, open, onToggle) {
@@ -1053,6 +1054,10 @@ function summaryAccs(m, wide) {
     const t = m.odds_trend, pts = t && t.points;
     out.push(acc("Oran hareketi", pts && pts.length > 1 ? `${fmtDayMonth(pts[0][0])}'dan beri` : "Oran henüz değişmedi",
       () => [oddsChart(m).lastChild], wide));
+    if (m.corners && !isDone(m)) { // §41 sadece piyasa
+      const mc = mainCornerLine(m);
+      out.push(acc("Korner", `Beklenen ${fmtDec(m.corners.expected)}${mc ? ` · ${fmtLine(mc.line)} Üst ${pct(mc.over)}` : ""}`, () => cornerSummary(m), wide));
+    }
   }
   const teams = teamsTab(m);
   const pick = (names) => teams.filter((el) => names.includes(secTitle(el)) || (el.classList && el.classList.contains("foot") && names.includes("xG")));
@@ -1129,16 +1134,18 @@ function viewMatchAll(root, id, from, opts) {
     : h("div", { class: "mid" }, h("small", {}, "Beklenen gol"),
         h("span", { class: "xg", "aria-label": `${m.home} ${fmtDec(e.home)}, ${m.away} ${fmtDec(e.away)}` }, `${fmtDec(e.home)}–${fmtDec(e.away)}`));
   const side = (s) => h("div", { class: "side" }, crest(m, s, "lg"), h("b", {}, m[s]), rank(s) ? h("small", {}, rank(s)) : null);
-  const tabs = past || done ? MTABS.football.filter(([k]) => k !== "goals") : MTABS[nba ? "basketball" : "football"];
+  const tabs0 = past || done ? MTABS.football.filter(([k]) => k !== "goals") : MTABS[nba ? "basketball" : "football"];
+  const tabs = !nba && !past && !done && m.corners ? [...tabs0.slice(0, 2), ["corners", "Korner"], ...tabs0.slice(2)] : tabs0; // §41
   const tab = tabs.some(([k]) => k === state.mtab.tab) ? state.mtab.tab : "result";
   const head = h("header", { class: "mhead" },
     h("p", { class: "meta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`, done ? " · bitti" : lv && (lv.state === "live" || lv.state === "ht") ? " · canlı" : started(m) ? " · başladı" : ""),
     h("h1", { class: "sr" }, matchLabel(m)),
     h("div", { class: "versus" }, side("home"), mid, side("away")),
     m.report ? karneCard(m) : null,
-    wide ? null : segmented("Bölüm", tabs, tab, (v) => { state.mtab.tab = v; render(); }));
+    wide ? null : h("div", { class: "chips mchips", role: "group", "aria-label": "Pazar" }, tabs.map(([v, lab]) => // §41 sekmeler yerine pazar çipleri
+      h("button", { type: "button", class: "chip", "aria-pressed": v === tab, onclick: () => { if (v !== tab) { state.mtab.tab = v; render(); } } }, lab))));
   if (wide) { root.replaceChildren(top, head, ...detailGrid(m, tabs.map(([k]) => k), render), note(isMinor(m))); return; }
-  const body = tab === "goals" ? goalsTab(m, render) : tab === "points" ? pointsTab(m, render)
+  const body = tab === "goals" ? goalsTab(m, render) : tab === "points" ? pointsTab(m, render) : tab === "corners" ? cornersTab(m, render)
     : tab === "teams" ? teamsTab(m) : resultTab(m, render);
   root.replaceChildren(top, head, ...body.filter(Boolean), note(isMinor(m)));
 }
@@ -1148,7 +1155,7 @@ function viewMatchAll(root, id, from, opts) {
    tam genişlik. 1280 px altında iki yığın alt alta (önce sol). */
 function detailGrid(m, tabKeys, render) {
   const build = { result: () => resultTab(m, render), goals: () => goalsTab(m, render), points: () => pointsTab(m, render),
-    teams: () => teamsTab(m) };
+    corners: () => cornersTab(m, render), teams: () => teamsTab(m) };
   const top = [], left = [], lines = [], right = [], bottom = [];
   for (const k of tabKeys) {
     for (const el of build[k]().filter(Boolean)) {
@@ -1260,35 +1267,72 @@ function iddaaField(m, o, minor, onLive) {
   show(input.value);
   return { input, evEl: wrap };
 }
+/* §41 Tüm seçenekler tek satırı (En iyi 3 satırıyla aynı düzen): seçim · bizim % · gereken % · oran (kaynak) · değer · ＋.
+   Seçime dokununca altında detay açılır: iddaa oranı girişi, gereken/tahmin, piyasa · model · harman · adil · yurtdışı.
+   Dönüş {input, o, el}: kar payı satırı (marginLine) input.value'yu okur; girdi detay kapalıyken de vardır. */
 function optRow(m, o, render, opts) {
   const { big, onLive } = opts || {};
   const minor = isMinor(m) || !!o.unverified; // §34 NBA'de Odds API'de olmayan iddaa çizgisi: sadece model, piyasa yok
-  const { input, evEl } = iddaaField(m, o, minor, onLive);
-  const d = diffOf(o);
   const derived = isDerived(o);
+  const flags = { minor: isMinor(m), unverified: !!o.unverified, derived };
+  const cells = { req: h("span", { class: "bnum oreq" }), price: h("span", { class: "bnum" }), ev: h("span", { class: "bnum" }) };
+  const paint = () => { // satırdaki sayılar: girişteki (ya da kayıtlı) iddaa oranıyla
+    const v = Iddaa.parseOdds(input.value);
+    const r = Decide.rowView(o, v, flags);
+    cells.req.replaceChildren(r.required != null ? pct(r.required) : h("span", { class: "muted" }, "–"));
+    const [pv, src, title] = v != null ? [v, "i", "iddaa oranı"] : o.price ? [o.price, "y", "yurtdışı oran"] : [o.fair, "a", "adil oran"];
+    cells.price.replaceChildren(odds(pv), h("small", { class: "osrc", title, "aria-label": title }, src));
+    cells.ev.replaceChildren(r.ev == null ? h("span", { class: "muted" }, "–")
+      : h("span", { class: r.ev >= Decide.PLAY - 1e-9 ? "good-t" : "bad-t" }, Iddaa.formatPct(r.ev)));
+  };
+  const { input, evEl } = iddaaField(m, o, minor, () => { paint(); syncAdd(); if (onLive) onLive(); });
+  paint();
+  const d = diffOf(o);
   const flag = !minor && !big && !derived && d != null && Math.abs(d) >= EDGE;
   const blendDiff = !minor && o.market === "h2h" && blendOn(m) && o.market_prob != null && Math.abs(o.prob - o.market_prob) > 0.0005;
-  // MS'de olasılık yukarıdaki büyük rakamlarda; diğer pazarlarda satırda yazılır
   const sub = o.unverified ? `Model ${pct(o.prob)} · piyasa yok · Adil ${odds(o.fair)}`
     : minor ? `Model ${pct(o.prob)} · Adil ${odds(o.fair)}`
-    : `${big ? "" : `${blendDiff ? `Harman ${pct(o.prob)}` : pct(o.prob)}${o.model_prob != null ? ` (model ${pct(o.model_prob)})` : ""} · `}Adil ${odds(o.fair)} · ${derived ? "piyasa türetilmiş" : `Yurtdışı ${o.price ? odds(o.price) : "–"}`}`;
-  const can = o.addable || minor;
+    : [blendDiff ? `Harman ${pct(o.prob)} · piyasa ${pct(o.market_prob)}` : `${o.market.startsWith("corners_") ? "Piyasa" : "Bizim"} ${pct(o.prob)}`,
+      o.model_prob != null ? `model ${pct(o.model_prob)}` : null, `Adil ${odds(o.fair)}`,
+      derived ? "piyasa türetilmiş" : `Yurtdışı ${o.price ? odds(o.price) : "–"}`].filter(Boolean).join(" · ");
   const inK = inKupon(o.key);
+  const corner = o.market.startsWith("corners_");
   // Kupona eklenemeyen seçenek (çeyrek çizgi): düğme yok, iddaa oranı ve beklenen değer yine çalışır. Çifte şans eklenir
-  // (§36: skordan sonuçlanır; yurtdışı oranı yok, adil oranla girer, iddaa oranı varsa o geçer)
-  const add = can ? h("button", { type: "button", class: "add-btn", "aria-pressed": inK,
+  // (§36: skordan sonuçlanır; yurtdışı oranı yok, adil oranla girer, iddaa oranı varsa o geçer). §41 korner: düğme var ama iddaa
+  // oranı yoksa pasif (yurtdışı oranla eklenmez); kupondaysa çıkarmak için hep etkin
+  const add = Decide.canAdd(o, iddaaOf(m.id, o.key), minor) || corner ? h("button", { type: "button", class: "badd", "aria-pressed": inK,
     "aria-label": `${o.pick}: ${inK ? "kupondan çıkar" : "kupona ekle"}`,
-    onclick: () => { toggleOption(m, o); render(); } },
-    icon(inK ? "check" : "plus", 16, 2.4), inK ? "Kuponda" : "Kupona ekle") : null;
-  return { input, o, el: h("div", { class: "opt row" },
-    h("div", { class: "opt-main" },
-      h("div", { class: "opt-pick" }, big ? h("span", { class: "k", "aria-hidden": "true" }, big) : null,
-        big ? h("span", { class: "sr" }, o.pick) : o.pick,
-        flag ? badge(`Model ${pts(d)}`, "accent", "xs") : null, derived ? badge("türetilmiş", "warn", "xs") : null, add),
-      h("span", { class: "opt-sub" }, sub),
-      evEl),
-    h("label", { class: "opt-in" }, h("span", { class: "sr" }, `${o.pick} iddaa oranı`), input)) };
+    onclick: () => { if (inK || Decide.canAdd(o, iddaaOf(m.id, o.key), minor)) { toggleOption(m, o); render(); } } },
+    icon(inK ? "check" : "plus", 18, 2.4)) : h("span");
+  const syncAdd = () => { // korner: girişteki oran geçerliyse etkin
+    if (!corner || inK) return;
+    const ok = Decide.canAdd(o, Iddaa.parseOdds(input.value), minor);
+    add.disabled = !ok;
+    add.title = ok ? "" : "Kupona eklemek için iddaa oranını yaz";
+    add.setAttribute("aria-label", ok ? `${o.pick}: kupona ekle` : `${o.pick}: kupona eklemek için iddaa oranını yaz`);
+  };
+  syncAdd();
+  const open = (state.mtab && state.mtab.open) || new Set();
+  if (state.mtab) state.mtab.open = open;
+  const id = `od-${(m.id + o.key).replace(/[^A-Za-z0-9]/g, "")}`;
+  const det = h("div", { class: "orow-d", id, hidden: !open.has(o.key) },
+    h("label", { class: "opt-in" }, h("span", { class: "sr" }, `${o.pick} iddaa oranı`), input),
+    h("div", { class: "opt-main" }, h("span", { class: "opt-sub" }, sub, flag ? [" ", badge(`Model ${pts(d)}`, "accent", "xs")] : null), evEl));
+  const pickBtn = h("button", { type: "button", class: "bpick opick", "aria-expanded": open.has(o.key), "aria-controls": id, title: o.pick,
+    onclick: () => {
+      const on = det.hidden;
+      det.hidden = !on;
+      pickBtn.setAttribute("aria-expanded", String(on));
+      if (on) { open.add(o.key); input.focus({ preventScroll: true }); } else open.delete(o.key);
+    } },
+    big ? h("span", { class: "k", "aria-hidden": "true" }, big) : null, h("span", { class: "otext" }, o.pick),
+    derived ? badge("türetilmiş", "warn", "xs") : null);
+  return { input, o, el: h("div", { class: "orow-w" },
+    h("div", { class: "brow orow row" }, pickBtn, h("span", { class: "bnum" }, pct(o.prob)), cells.req, cells.price, cells.ev, add), det) };
 }
+/* Tek satırlık seçenek kartının başlık satırı. */
+const optHead = () => h("div", { class: "brow orow bcols", "aria-hidden": "true" },
+  h("span", {}, "Seçenek"), h("span", {}, "Bizim"), h("span", { class: "oreq" }, "Gereken"), h("span", {}, "Oran"), h("span", {}, "Değer"), h("span"));
 const pctPlain = (x) => Iddaa.formatPct(x).replace(/^\+/, "");
 /* MS kar payı: maçın tüm MS sonuçlarının iddaa oranı girilince (futbol 1-X-2, NBA 1-2). */
 function marginLine(m, rows) {
@@ -1317,9 +1361,75 @@ function optsOf(m) {
   const keys = rec ? [...new Set([...Object.keys(rec.odds), ...Iddaa.autoKeys(state.iddaa, m.id)])] : [];
   return keys.length ? m.options.concat(Bulletin.extraOptions(m, keys)) : m.options;
 }
+/* §41 korner seçenekleri (sadece piyasa, data.json corners.options): optsOf'a girmez → KARAR, En iyi 3, günün özeti ve
+   Değerli kornersiz kalır. Kupon, Kuponum ve iddaa kaydı anahtarla optionByKey üzerinden bulur. */
+const cornerOpts = (m) => (m && m.corners && m.corners.options) || [];
+const optionByKey = (m, key) => optsOf(m).find((x) => x.key === key) || cornerOpts(m).find((x) => x.key === key);
+/* Gösterilecek ana toplam korner çizgisi: iddaa kaydında korner çizgisi varsa o, yoksa Üst olasılığı %50'ye en yakın. */
+function mainCornerLine(m) {
+  const opts = cornerOpts(m).filter((o) => o.outcome === "over");
+  if (!opts.length) return null;
+  const rec = state.iddaa.matches[m.id];
+  const keys = [...(rec ? Object.keys(rec.odds) : []), ...Iddaa.autoKeys(state.iddaa, m.id)];
+  const il = keys.map(History.parseKey).find((k) => k && k.market === "corners_totals");
+  const hit = il && opts.find((o) => o.line === il.line);
+  const o = hit || opts.reduce((a, b) => (Math.abs(b.prob - 0.5) < Math.abs(a.prob - 0.5) ? b : a));
+  return { line: o.line, over: o.prob };
+}
+const cornerTile = (name, big, cap) => h("div", { class: "tile" }, h("span", { class: "nm" }, name), h("span", { class: "big" }, big), h("span", { class: "cap" }, cap));
+function cornerInfoLines(title, rows) {
+  if (!rows || !rows.length) return null;
+  return sec(title, h("ul", { class: "list-plain card" }, rows.map((r) => h("li", {},
+    h("span", {}, `Üst ${fmtLine(r.line)} · Alt ${fmtLine(r.line)}`),
+    h("span", {}, h("b", {}, `${pct(r.over)} · ${pct(1 - r.over)}`), h("span", { class: "muted" }, `  ${r.books} şirket`))))));
+}
+/* Tüm seçenekler > Korner: beklenen korner, toplam korner Alt/Üst (iddaa girişi, gereken, değer, ＋), takım ve 1. yarı çizgileri
+   (bilgi), kim daha çok korner. Hepsi yurtdışı şirketlerin marjsız piyasası; model yok. */
+function cornersTab(m, render) {
+  const c = m.corners;
+  if (!c) return [h("p", { class: "empty" }, "Bu maç için korner oranı yok.")];
+  const out = [];
+  const main = mainCornerLine(m);
+  out.push(sec("Beklenen korner", padCard(h("div", { class: "tiles" },
+    cornerTile("Toplam", c.expected == null ? "–" : fmtDec(c.expected), "piyasa"),
+    cornerTile("Şirket", String(c.books), "toplam korner oranı")))));
+  out.push(lineGroup(m, "Toplam korner", cornerOpts(m), render, (o) => o.line, (l) => `${fmtLine(l)} korner`, main ? main.line : 9.5));
+  out.push(cornerInfoLines(`${m.home} korneri`, c.home), cornerInfoLines(`${m.away} korneri`, c.away),
+    cornerInfoLines("1. yarı toplam korner", c.first_half));
+  if (c.more) out.push(sec("Kim daha çok korner", padCard(h("div", { class: "tiles" },
+    cornerTile(m.home, pct(c.more.home), "ev"), cornerTile("Eşit", pct(c.more.draw), "beraberlik"), cornerTile(m.away, pct(c.more.away), "deplasman")))));
+  out.push(h("p", { class: "foot" }, "Korner olasılıkları yurtdışı şirketlerin oranlarından (marjsız piyasa); kendi model yok. ",
+    "Değerli'ye girmez; kupona sadece iddaa oranıyla. Sonuç ertesi sabah, canlıda iddaa skoruyla geçici."));
+  return out;
+}
+/* Maç özeti > Korner açılır bölümü. */
+function cornerSummary(m) {
+  const c = m.corners;
+  const tot = cornerOpts(m).filter((o) => o.outcome === "over");
+  const iddaaTxt = (line) => {
+    const parts = ["over", "under"].map((oc) => {
+      const o = cornerOpts(m).find((x) => x.line === line && x.outcome === oc), v = o && iddaaOf(m.id, o.key);
+      if (v == null) return null;
+      const r = Decide.rowView(o, v, {});
+      return `${oc === "over" ? "Üst" : "Alt"} ${odds(v)} (${Iddaa.formatPct(r.ev)})`;
+    }).filter(Boolean);
+    return parts.length ? `iddaa ${parts.join(" · ")}` : null;
+  };
+  const tm = (rows) => (rows && rows.length ? rows.reduce((a, b) => (Math.abs(b.over - 0.5) < Math.abs(a.over - 0.5) ? b : a)) : null);
+  const th = tm(c.home), ta = tm(c.away);
+  return [
+    h("p", { class: "sec-note", style: "margin:0 0 8px" }, `Piyasanın beklenen toplam korneri ${fmtDec(c.expected)} (${c.books} şirket, marjsız). Model yok.`),
+    h("ul", { class: "list-plain card" }, tot.map((o) => h("li", {},
+      h("span", {}, `${fmtLine(o.line)} korner`, iddaaTxt(o.line) ? h("small", { class: "muted" }, `  ${iddaaTxt(o.line)}`) : null),
+      h("span", {}, h("b", {}, `Üst ${pct(o.prob)}`), h("span", { class: "muted" }, ` · Alt ${pct(1 - o.prob)}`))))),
+    th || ta ? h("p", { class: "sec-note" }, [th ? `${m.home} Üst ${fmtLine(th.line)} ${pct(th.over)}` : null,
+      ta ? `${m.away} Üst ${fmtLine(ta.line)} ${pct(ta.over)}` : null].filter(Boolean).join(" · ")) : null,
+    h("a", { class: "lnk", href: matchHref(m.id, true), onclick: () => { state.mtab = { id: m.id, tab: "corners" }; } }, "Tüm seçenekler › Korner"),
+  ];
+}
 function optionsCard(m, opts, render, big) {
-  const rows = opts.map((o) => optRow(m, o, render, { big: big ? (m.sport === "basketball" ? SHORT[o.outcome] : SHORT[o.outcome]) : null }));
-  return { rows, el: card(rows.map((r) => r.el)) };
+  const rows = opts.map((o) => optRow(m, o, render, { big: big ? SHORT[o.outcome] : null }));
+  return { rows, el: ocard(optHead(), rows.map((r) => r.el)) };
 }
 function resultTab(m, render) {
   const minor = isMinor(m), nba = m.sport === "basketball";
@@ -1352,8 +1462,8 @@ function resultTab(m, render) {
     let margin = null;
     const rows = h2h.map((o) => optRow(m, o, render, { big: SHORT[o.outcome], onLive: () => margin && margin.update() }));
     margin = marginLine(m, rows);
-    out.push(sec("İddaa oranların", card(rows.map((r) => r.el), margin.el),
-      h("p", { class: "sec-note" }, "iddaa'da gördüğün oranı kutuya yaz: beklenen değer = olasılık × oran − 1. ",
+    out.push(sec("İddaa oranların", ocard(optHead(), rows.map((r) => r.el), margin.el),
+      h("p", { class: "sec-note" }, "Seçeneğe dokun, açılan kutuya iddaa'da gördüğün oranı yaz: değer = olasılık × oran − 1. Oranın yanındaki harf kaynağı: i iddaa, y yurtdışı, a adil. ",
         minor ? "Bu ligde model doğrulanmamış; renk verilmez." : `+%${bandPct()} üstü değerli, −%${bandPct()} altı düşük, arası adil.`,
         " Oran bu cihazda kalır, Kuponum'a da geçer. Otomatik çekilen oranın altında “iddaa”, senin yazdığında “elle” yazar.")));
   }
@@ -2125,7 +2235,7 @@ function couponNotes(r, kind, n) {
 function couponBody(r) {
   const legs = r.legs.map((leg) => {
     const ref = byId.get(leg.match);
-    const o = ref && optsOf(ref.match).find((x) => x.key === leg.key);
+    const o = ref && optionByKey(ref.match, leg.key);
     if (!o) return null;
     return h("div", { class: "cl" },
       h("div", { class: "info" }, h("span", { class: "pick" }, o.pick),
@@ -2185,7 +2295,7 @@ function couponCard(day, kind, title, desc, render) {
 const BUILDER_STORE = "macanaliz.olustur.v1";
 function loadBuilder() { try { return Coupons.parseBuilder(localStorage.getItem(BUILDER_STORE)); } catch { return Coupons.builderDefaults(); } }
 function saveBuilder(s) { try { localStorage.setItem(BUILDER_STORE, Coupons.serializeBuilder(s)); } catch { /* kayıt yoksa bu oturumda kalır */ } }
-const BUILDER_MARKET_NAMES = { h2h: "Maç sonucu", double_chance: "Çifte şans", totals: "Alt/Üst", btts: "KG", nba: "NBA" };
+const BUILDER_MARKET_NAMES = { h2h: "Maç sonucu", double_chance: "Çifte şans", totals: "Alt/Üst", btts: "KG", corners: "Korner", nba: "NBA" };
 /* Oluşturucu adayları: seçili günün futbol maçları + (NBA seçiliyse) aynı günün NBA gecesi. Başlamış, biten, diğer lig,
    kupona eklenemeyen, iddaa'da kapalı/bültende olmayan seçenek girmez. Oran iddaa, yoksa yurtdışı (çifte şansta sadece iddaa). */
 function builderEntries(day, s) {
@@ -2193,9 +2303,9 @@ function builderEntries(day, s) {
   const fd = (DATA.football || []).find((d) => dayOffset(d, "football") === off);
   const nd = (DATA.basketball || []).find((d) => dayOffset(d, "basketball") === off);
   const out = [];
-  const add = (m, groupOf) => {
+  const add = (m, groupOf, list) => {
     if (isDone(m) || started(m) || isMinor(m)) return;
-    for (const o of optsOf(m)) {
+    for (const o of list || optsOf(m)) {
       const g = groupOf(o);
       if (!g || !o.addable) continue;
       const st = legIddaa(m.id, o.key, m.kickoff);
@@ -2207,6 +2317,7 @@ function builderEntries(day, s) {
     }
   };
   if (fd) for (const m of fd.matches) add(m, (o) => (["h2h", "double_chance", "totals", "btts"].includes(o.market) ? o.market : null));
+  if (fd && s.markets.includes("corners")) for (const m of fd.matches) add(m, () => "corners", cornerOpts(m)); // §41 Coupons.custom sadece iddaa oranlıyı alır
   if (nd && s.markets.includes("nba")) for (const m of nd.matches) add(m, (o) => (["h2h", "spreads", "totals"].includes(o.market) ? "nba" : null));
   return out;
 }
@@ -2273,19 +2384,11 @@ function liveLegBadge(ls) {
   const [now, done, cls] = LIVE_RES[ls.result];
   return badge(ls.decided ? `${done}${ls.provisional ? (ls.certain ? " (geçici)" : " (muhtemel)") : ""}` : now, cls, "xs");
 }
-function liveLegText(v) {
-  if (v.state === "ended") {
-    const t = v.certain ? `Bitti · ${dash(v.score)} (iddaa)` : `Muhtemelen bitti · son skor ${dash(v.score)}`;
-    return v.settleScore ? t : `${t} · durum kodu tanınmadı, sonuç sabah`;
-  }
-  if (v.state === "gone") return `Sonuç bekleniyor · son skor ${dash(v.score)}`;
-  return `${v.label} · ${dash(v.score)}`;
-}
 /* Seçimin canlı satırı (Kuponum, Geçmiş): rozet + dakika/skor; maç canlı değilse null. */
 function liveLegLine(l) {
   const v = liveOf(l.matchId);
   if (!v || l.manual || l.status) return null;
-  return h("span", { class: "meta live-line" }, liveLegBadge(Live.legState(l.key, v)), " ", liveLegText(v));
+  return h("span", { class: "meta live-line" }, liveLegBadge(Live.legState(l.key, v)), " ", Live.legText(l.key, v));
 }
 /* Kupon rozeti: sonuçlanmış (geçici/muhtemel işaretli) ya da bekleyen kuponda canlı özet. */
 function couponBadge(c, r) {
@@ -2529,17 +2632,20 @@ function viewHistory(root) {
   root.replaceChildren(...kids.filter(Boolean));
 }
 function legStatusText(l) {
-  const auto = l.status === "finished" ? History.legFromScore(l.key, l.score) : null;
-  if (l.manual) return `Elle: ${RESULT_NAMES[l.manual]}${auto ? ` (otomatik: ${RESULT_NAMES[auto]}, skor ${l.score})` : ""}`;
-  if (l.status === "finished") return `Skor ${l.score} → ${auto ? RESULT_NAMES[auto] : "sonuçlandırılamadı"}`;
+  // §41 korner seçimi korner sayısıyla sonuçlanır (History.legBasis): metin de gol skorunu değil korneri yazar
+  const b = History.legBasis(l), corner = !!b && b.kind === "corners", what = corner ? "korner" : "skor";
+  const auto = b && b.official && b.score != null ? History.legFromScore(l.key, b.score) : null;
+  if (l.manual) return `Elle: ${RESULT_NAMES[l.manual]}${auto ? ` (otomatik: ${RESULT_NAMES[auto]}, ${what} ${b.score})` : ""}`;
+  if (l.status === "finished" && (!corner || b.official)) return `${corner ? "Korner" : "Skor"} ${b.score} → ${auto ? RESULT_NAMES[auto] : "sonuçlandırılamadı"}`;
   if (l.status === "postponed") return "Ertelendi — iddaa kuralına göre elle sonuçlandır";
   if (l.status === "cancelled") return "İptal — iddaa kuralına göre elle sonuçlandır";
   if (l.status === "aet") return `Uzatmaya gitti (${l.score}) — 90 dakika sonucuna göre elle sonuçlandır`;
-  if (History.legProvisional(l)) { // §37 iddaa canlı skoru
-    const res = RESULT_NAMES[History.legFromScore(l.key, l.prov.score)];
-    return `${l.prov.certain ? `Bitti · skor ${dash(l.prov.score)}` : `Muhtemelen bitti · son skor ${dash(l.prov.score)}`} (iddaa) → `
+  if (History.legProvisional(l)) { // §37 iddaa canlı skoru (korner seçiminde canlı korner)
+    const res = RESULT_NAMES[History.legFromScore(l.key, b.score)];
+    return `${l.prov.certain ? `Bitti · ${what} ${dash(b.score)}` : `Muhtemelen bitti · son ${what} ${dash(b.score)}`} (iddaa) → `
       + `${res} (${l.prov.certain ? "geçici" : "muhtemel"}) · resmi sonuç bekleniyor`;
   }
+  if (corner && l.status === "finished") return `Skor ${l.score} · korner sonucu bekleniyor`;
   return new Date(l.kickoff) <= new Date() ? "Sonuç bekleniyor" : "Oynanmadı";
 }
 function viewHistoryDetail(root, id) {
