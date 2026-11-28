@@ -465,6 +465,24 @@ const LIVE_SPORTS = ["football", "basketball"];
 const LIVE_WINDOW_MS = { football: 3 * 3600 * 1000, basketball: 3.5 * 3600 * 1000 };
 state.live = { football: Live.emptyTable(), basketball: Live.emptyTable() };
 state.liveIds = new Map(); // bizim maç id → {sport, iddaaId}
+/* Son görülen canlı skor (maç başına skor + zaman): yenileme / uygulama kapanıp açılınca da "son görülen 1-1" yazılsın.
+   Sadece metin; kupon sonuçlandırmaz. Başlamasından 36 sa sonra silinir (Live.pruneSeen). */
+const LIVE_SEEN = "macanaliz.canli.skor.v1";
+state.liveSeen = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LIVE_SEEN)), st = Live.pruneSeen(raw, Date.now());
+    if (st !== raw) localStorage.setItem(LIVE_SEEN, JSON.stringify(st));
+    return st;
+  } catch { return {}; }
+})();
+function saveLiveSeen() {
+  try { localStorage.setItem(LIVE_SEEN, JSON.stringify(state.liveSeen)); } catch { /* yok sayılır */ }
+}
+/* Başlama + 2 sa 15 dk (futbol) / 3 sa (NBA) geçmiş, canlı akışta olmayan maç: "bitti · sonuç sabah gelir[ · son görülen x]". */
+function liveAfter(m) {
+  if (m.score != null) return null;
+  return Live.afterText(Date.parse(m.kickoff), Date.now(), m.sport, liveOf(m.id), state.liveSeen[m.id]);
+}
 const liveLast = { football: 0, basketball: 0 }; // son deneme (ms)
 let liveBusy = false, liveTimer = null;
 function liveOn() {
@@ -522,16 +540,20 @@ async function fetchLive(sport, cands, st) {
   }
   Object.assign(st, { lastOk: new Date().toISOString(), error: null, errorAt: null, matched: mt.pairs.length });
   // biten maçlar → oynanmış kuponlara geçici sonuç
-  const items = [], back = [], at = new Date().toISOString();
+  const items = [], back = [], seen = [], at = new Date().toISOString();
   for (const [id, x] of state.liveIds) {
     if (x.sport !== sport) continue;
     const v = Live.view(t, x.iddaaId, sport);
+    const ref = byId.get(id);
+    if (v) seen.push({ id, score: v.score, kickoff: ref ? Date.parse(ref.match.kickoff) : null });
     if (v && v.state === "ended" && v.settleScore) items.push({ id, score: v.settleScore, certain: v.certain, corners: v.settleCorners });
     else if (v && (v.state === "live" || v.state === "ht")) back.push(id); // muhtemel bitti sayılmıştı ama yeniden canlı
   }
   const w = back.length ? History.withdrawProvisional(state.history, back, at) : 0;
   const a = items.length ? History.applyProvisional(state.history, items, at) : 0;
   if (w || a) saveHistory();
+  const s2 = Live.pruneSeen(Live.rememberSeen(state.liveSeen, seen, Date.now()), Date.now());
+  if (s2 !== state.liveSeen) { state.liveSeen = s2; saveLiveSeen(); }
 }
 async function pollLive() {
   clearTimeout(liveTimer);
@@ -834,16 +856,19 @@ function matchRow(m) {
   const e = edgeOf(m), live = started(m);
   const lv = liveOf(m.id), lvOn = lv && lv.state !== "gone"; // §37 canlı skor
   const band = Decide.matchBand(m, decideCtx);
-  const sc = lvOn ? lv.score.split("-") : null;
-  const label = `${lvOn ? `${liveWord(lv)}, ${dash(lv.score)}` : `${fmtTime(m.kickoff)}${live ? `, ${lv ? "sonuç bekleniyor" : "başladı"}` : ""}`}. ${m.home} – ${m.away}. `
+  // biten maçı kaçıran telefon (2026-11-28): listede kısa "bitti" + son görülen skor soluk; tam metin aria-label'da
+  const aft = live && !lvOn ? liveAfter(m) : null, seen = aft && state.liveSeen[m.id];
+  const sc = lvOn ? lv.score.split("-") : seen ? seen.score.split("-") : null;
+  const startTxt = aft || (lv ? "sonuç bekleniyor" : "başladı");
+  const label = `${lvOn ? `${liveWord(lv)}, ${dash(lv.score)}` : `${fmtTime(m.kickoff)}${live ? `, ${startTxt}` : ""}`}. ${m.home} – ${m.away}. `
     + (vals ? outs.map((k, i) => `${SHORT[k]} %${Math.round(vals[i] * 100)}`).join(", ") : "Olasılık yok")
     + (e ? `. ${edgeLong(e)}` : "") + (band ? `. iddaa: ${Decide.BAND_TEXT[band]}` : "");
   return h("a", { class: "mrow row", href: `#/mac/${encodeURIComponent(m.id)}`, "aria-label": label },
     h("div", { class: outs.length === 2 ? "mrow-top two" : "mrow-top", "aria-hidden": "true" },
       lvOn ? h("span", { class: "time" }, h("span", { class: "minute" }, lv.label))
-        : h("span", { class: live ? "time live" : "time" }, fmtTime(m.kickoff), live ? h("small", {}, lv ? "sonuç bekleniyor" : "başladı") : bandDot(band)),
+        : h("span", { class: live ? "time live" : "time" }, fmtTime(m.kickoff), live ? h("small", {}, aft ? "bitti" : startTxt) : bandDot(band)),
       h("div", { class: "teams" }, ["home", "away"].map((s, i) => h("span", { class: "team" }, crest(m, s), h("span", { class: "nm" }, m[s]),
-        sc ? h("b", { class: "lscore" }, sc[i]) : null)),
+        sc ? h("b", { class: lvOn ? "lscore" : "lscore seen" }, sc[i]) : null)),
       e ? h("span", { class: "mnote" }, edgeLong(e)) : null),
       vals ? vals.map((p) => h("span", { class: p === top ? "p3 top" : "p3" }, Math.round(p * 100)))
         : outs.map(() => h("span", { class: "p3" }, "–"))));
@@ -1092,7 +1117,8 @@ function viewMatchSummary(root, id, from, opts) {
   if (!ref) { root.replaceChildren(top, h("p", { class: "empty" }, "Maç bulunamadı; veriler güncellenmiş olabilir.")); return; }
   const m = ref.match;
   const render = () => { const y = window.scrollY, dy = root.scrollTop; viewMatchSummary(root, id, from, opts); window.scrollTo(0, y); root.scrollTop = dy; };
-  const meta = h("p", { class: "qmeta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`);
+  const aft = !isDone(m) && started(m) ? liveAfter(m) : null; // biten maçı kaçıran telefon (2026-11-28)
+  const meta = h("p", { class: "qmeta" }, `${m.competition} · ${fmtWhen(m.kickoff)}${aft ? ` · ${aft}` : ""}`);
   const warn = isMinor(m) ? null : oddsWarning();
   const main = [qHead(m)];
   if (m.report) main.push(karneCard(m));
@@ -1138,7 +1164,7 @@ function viewMatchAll(root, id, from, opts) {
   const tabs = !nba && !past && !done && m.corners ? [...tabs0.slice(0, 2), ["corners", "Korner"], ...tabs0.slice(2)] : tabs0; // §41
   const tab = tabs.some(([k]) => k === state.mtab.tab) ? state.mtab.tab : "result";
   const head = h("header", { class: "mhead" },
-    h("p", { class: "meta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`, done ? " · bitti" : lv && (lv.state === "live" || lv.state === "ht") ? " · canlı" : started(m) ? " · başladı" : ""),
+    h("p", { class: "meta" }, `${m.competition} · ${fmtWhen(m.kickoff)}`, done ? " · bitti" : lv && (lv.state === "live" || lv.state === "ht") ? " · canlı" : started(m) ? ` · ${liveAfter(m) || "başladı"}` : ""),
     h("h1", { class: "sr" }, matchLabel(m)),
     h("div", { class: "versus" }, side("home"), mid, side("away")),
     m.report ? karneCard(m) : null,

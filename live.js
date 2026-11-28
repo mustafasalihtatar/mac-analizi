@@ -175,7 +175,45 @@ const Live = (() => {
     return next.length ? Math.min(...next) : null;
   }
 
-  return { ST, EVERY_MS, KNOWN, wakeAt, url, parse, emptyTable, merge, needsFull, view, legState, legText, couponNow, delay };
+  /* ---------- bitti etiketi + son görülen skor (2026-11-28) ----------
+     Biten maçı sayfa kapalıyken kaçıran telefonda maç sabaha kadar "başladı" kalmasın: başlama + 2 sa 15 dk (futbol, diğer ligler)
+     / + 3 sa (basketbol) geçmiş ve maç canlı akışta yoksa "bitti · sonuç sabah gelir". Sadece metin: kupon sonuçlandırmaz
+     (geçici sonuç yalnız kod 6 ya da looksFinal düşüşüyle, view → legState). Son görülen skor localStorage'da (app.js
+     macanaliz.canli.skor.v1): {<bizim maç id>: {score, at, kickoff}}. */
+  const AFTER_MS = { football: 135 * 60000, basketball: 180 * 60000 };
+  const SEEN_KEEP_MS = 36 * 3600 * 1000;
+
+  /* v: Live.view (null = tabloda yok); seen: {score} | null. Akışta (canlı, İY, bitti) olan maçın kendi etiketi var → null. */
+  function afterText(kickoffMs, nowMs, sport, v, seen) {
+    if (v && v.state !== "gone") return null;
+    if (!(nowMs >= kickoffMs + (AFTER_MS[sport] || AFTER_MS.football))) return null;
+    const sc = seen && typeof seen.score === "string" && seen.score ? seen.score : null;
+    return `bitti · sonuç sabah gelir${sc ? ` · son görülen ${sc.replace("-", "–")}` : ""}`;
+  }
+
+  /* items [{id, score, kickoff}] → yeni kayıt; hiçbir skor değişmediyse aynı nesne (yazma gerekmez). */
+  function rememberSeen(store, items, nowMs) {
+    let out = store;
+    for (const x of items) {
+      if (!x || typeof x.score !== "string" || !x.score) continue;
+      const old = store[x.id];
+      if (old && old.score === x.score) continue;
+      if (out === store) out = { ...store };
+      out[x.id] = { score: x.score, at: nowMs, kickoff: isNum(x.kickoff) ? x.kickoff : nowMs };
+    }
+    return out;
+  }
+
+  /* Bozuk kayıtları ve başlamasından 36 sa geçmiş maçları atar; değişmezse aynı nesne. */
+  function pruneSeen(store, nowMs) {
+    if (!store || typeof store !== "object" || Array.isArray(store)) return {};
+    const keep = Object.entries(store).filter(([, x]) => x && typeof x.score === "string" && isNum(x.kickoff)
+      && nowMs - x.kickoff <= SEEN_KEEP_MS);
+    return keep.length === Object.keys(store).length ? store : Object.fromEntries(keep);
+  }
+
+  return { ST, EVERY_MS, KNOWN, wakeAt, url, parse, emptyTable, merge, needsFull, view, legState, legText, couponNow, delay,
+    afterText, rememberSeen, pruneSeen };
 })();
 
 if (typeof module !== "undefined") module.exports = Live;

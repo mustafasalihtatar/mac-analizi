@@ -329,6 +329,7 @@ details.more p { line-height: 1.45; margin-bottom: 8px; }
 .mrow .minute { display: inline-block; padding: 2px 7px; border-radius: 6px; background: var(--accent); color: var(--on-accent);
   font-size: 12px; font-weight: 700; white-space: nowrap; }
 .team .lscore { margin-left: auto; padding-left: 6px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.team .lscore.seen { color: var(--muted); font-weight: 600; } /* son görülen canlı skor, maç bitti (resmi sonuç sabah) */
 .vband { display: flex; align-items: center; gap: 4px; margin-top: 5px; }
 .vdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .vdot.play { background: var(--good); }
